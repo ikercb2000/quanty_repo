@@ -6,7 +6,6 @@ from utils import *
 # Necessary packages
 
 import math
-import random
 from scipy.linalg import expm
 
 # Avellaneda-Stoikov Original Model Bot

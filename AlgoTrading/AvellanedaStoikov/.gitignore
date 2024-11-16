@@ -1,5 +1,2 @@
 .venv/
 BTCUSDT.csv
-node_modules/
-dist/
-*.log
