@@ -1,0 +1,17 @@
+{
+  "name": "avellanedastoikov",
+  "version": "0.1.0",
+  "scripts": {
+    "commit": "cz",
+    "release": "semantic-release"
+  },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
+  "devDependencies": {
+    "cz-conventional-changelog": "^3.3.0",
+    "semantic-release": "^20.0.0"
+  }
+}
