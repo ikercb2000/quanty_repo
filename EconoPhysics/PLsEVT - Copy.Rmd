@@ -1,0 +1,5037 @@
+---
+title: "PLsEVT"
+author: "Iker Caballero Bragagnini"
+date: "2023-10-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# https://cran.r-project.org/web/views/ExtremeValue.html#UniBayesian
+# https://github.com/qrmtutorial/qrm/tree/master
+```
+
+## Necessary packages
+
+```{r}
+library(readxl)
+library(tidyverse)
+library(zoo)
+library(TSA)
+library(stats)
+library(evd)
+library(evir)
+library(ercv)
+library(poweRlaw)
+library(MASS)
+library(QRM)
+library(fishmethods)
+library(StableEstim)
+library(stabledist)
+library(DistributionUtils)
+```
+
+```{r}
+  
+emplot_i <- function (data, alog = "", ...){
+    data <- sort(as.numeric(data))
+    ypoints <- 1 - ppoints(data)
+    plot(data, ypoints, log = alog, ...)
+    invisible(list(x = data, y = ypoints))
+}
+
+tailplot_i <-function (x, optlog = NA, extend = 1.5, labels = TRUE, main_i, xlab_i, ylab_i = "1-F(x) on log scale",...) 
+{
+    data <- as.numeric(x$data)
+    threshold <- x$threshold
+    xi <- x$par.ests["xi"]
+    beta <- x$par.ests["beta"]
+    plotmin <- threshold
+    if (extend <= 1) 
+        stop("extend must be > 1")
+    plotmax <- max(data) * extend
+    xx <- seq(from = 0, to = 1, length = 1000)
+    z <- qgpd(xx, xi, threshold, beta)
+    z <- pmax(pmin(z, plotmax), plotmin)
+    ypoints <- ppoints(sort(data))
+    y <- pgpd(z, xi, threshold, beta)
+    type <- "tail"
+    if (!is.na(optlog)) 
+        alog <- optlog
+    else alog <- "xy"
+    prob <- x$p.less.thresh
+    ypoints <- (1 - prob) * (1 - ypoints)
+    y <- (1 - prob) * (1 - y)
+    yylab <- "1-F(x)"
+    shape <- xi
+    scale <- beta * (1 - prob)^xi
+    location <- threshold - (scale * ((1 - prob)^(-xi) - 1))/xi
+    plot(sort(data), ypoints, xlim = range(5e-04, plotmax), 
+        log = alog, axes = TRUE, main=main_i,xlab=xlab_i,ylab=ylab_i)
+    lines(z[y >= 0], y[y >= 0],col="green")
+    lastcurve <- list(lastfit = x, type = type, dist = "gpd", 
+        plotmin = plotmin, plotmax = plotmax, alog = alog, location = as.numeric(location), 
+        shape = as.numeric(shape), scale = as.numeric(scale))
+    invisible(lastcurve)
+}
+
+tp <- function (x, optlog = NA, extend = 1.5, ...) 
+{
+    data <- as.numeric(x$data)
+    threshold <- x$threshold
+    xi <- x$par.ests["xi"]
+    beta <- x$par.ests["beta"]
+    plotmin <- threshold
+    if (extend <= 1) 
+        stop("extend must be > 1")
+    plotmax <- max(data) * extend
+    xx <- seq(from = 0, to = 1, length = 1000)
+    z <- qgpd(xx, xi, threshold, beta)
+    z <- pmax(pmin(z, plotmax), plotmin)
+    ypoints <- ppoints(sort(data))
+    y <- pgpd(z, xi, threshold, beta)
+    type <- "tail"
+    if (!is.na(optlog)) 
+        alog <- optlog
+    else alog <- "xy"
+    prob <- x$p.less.thresh
+    ypoints <- (1 - prob) * (1 - ypoints)
+    y <- (1 - prob) * (1 - y)
+    yylab <- "1-F(x)"
+    shape <- xi
+    scale <- beta * (1 - prob)^xi
+    location <- threshold - (scale * ((1 - prob)^(-xi) - 1))/xi
+    plot(sort(data), ypoints, xlim = range(plotmin, plotmax), 
+        ylim = range(ypoints, y, na.rm = TRUE), 
+        log = alog, axes = TRUE, ylab = "1-F(x)",...)
+    lines(z[y >= 0], y[y >= 0],col="green")
+    lastcurve <- list(lastfit = x, type = type, dist = "gpd", 
+        plotmin = plotmin, plotmax = plotmax, alog = alog, location = as.numeric(location), 
+        shape = as.numeric(shape), scale = as.numeric(scale))
+    invisible(lastcurve)
+}
+```
+
+# Load data
+
+# Nikkei 225
+
+```{r}
+jap_10s <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_10s.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+
+log_ret_jap_10s <- diff(log(as.numeric(ts(jap_10s[6]))))
+log_pos_ret_jap_10s <- log_ret_jap_10s[log_ret_jap_10s>0]
+log_neg_ret_jap_10s <- abs(log_ret_jap_10s[log_ret_jap_10s<0])
+vol_jap_10s <- as.numeric(ts(jap_10s[7]))
+
+jap_1m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_1m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_1m <- diff(log(as.numeric(ts(jap_1m[6]))))
+log_pos_ret_jap_1m <- log_ret_jap_1m[log_ret_jap_1m>0]
+log_neg_ret_jap_1m <- abs(log_ret_jap_1m[log_ret_jap_1m<0])
+vol_jap_1m <- as.numeric(ts(jap_1m[7]))
+
+jap_5m <- read_excel("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_5m.xlsx")
+
+log_ret_jap_5m <- diff(log(as.numeric(ts(jap_5m[6]))))
+log_pos_ret_jap_5m <- log_ret_jap_5m[log_ret_jap_5m>0]
+log_neg_ret_jap_5m <- abs(log_ret_jap_5m[log_ret_jap_5m<0])
+vol_jap_5m <- as.numeric(ts(jap_5m[7]))
+
+jap_15m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_15m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_15m <- diff(log(as.numeric(ts(jap_15m[6]))))
+log_pos_ret_jap_15m <- log_ret_jap_15m[log_ret_jap_15m>0]
+log_neg_ret_jap_15m <- abs(log_ret_jap_15m[log_ret_jap_15m<0])
+vol_jap_15m <- as.numeric(ts(jap_15m[7]))
+
+jap_30m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_30m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_30m <- diff(log(as.numeric(ts(jap_30m[6]))))
+log_pos_ret_jap_30m <- log_ret_jap_30m[log_ret_jap_30m>0]
+log_neg_ret_jap_30m <- abs(log_ret_jap_30m[log_ret_jap_30m<0])
+vol_jap_30m <- as.numeric(ts(jap_30m[7]))
+
+jap_1h <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_1h.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_1h <- diff(log(as.numeric(ts(jap_1h[6]))))
+log_pos_ret_jap_1h <- log_ret_jap_1h[log_ret_jap_1h>0]
+log_neg_ret_jap_1h <- abs(log_ret_jap_1h[log_ret_jap_1h<0])
+vol_jap_1h <- as.numeric(ts(jap_1h[7]))
+
+jap_4h <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_4h.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_4h <- diff(log(as.numeric(ts(jap_4h[6]))))
+log_pos_ret_jap_4h <- log_ret_jap_4h[log_ret_jap_4h>0]
+log_neg_ret_jap_4h <- abs(log_ret_jap_4h[log_ret_jap_4h<0])
+vol_jap_4h <- as.numeric(ts(jap_4h[7]))
+
+jap_12h <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_12h.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_12h <- diff(log(as.numeric(ts(jap_12h[6]))))
+log_pos_ret_jap_12h <- log_ret_jap_12h[log_ret_jap_12h>0]
+log_neg_ret_jap_12h <- abs(log_ret_jap_12h[log_ret_jap_12h<0])
+vol_jap_12h <- as.numeric(ts(jap_12h[7]))
+
+jap_1d <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/Nikkei 225/JPNIDXJPY_1d.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_jap_1d <- diff(log(as.numeric(ts(jap_1d[6]))))
+log_pos_ret_jap_1d <- log_ret_jap_1d[log_ret_jap_1d>0]
+log_neg_ret_jap_1d <- abs(log_ret_jap_1d[log_ret_jap_1d<0])
+vol_jap_1d <- as.numeric(ts(jap_1d[7]))
+
+length(log_pos_ret_jap_10s)
+length(log_neg_ret_jap_10s)
+
+length(log_pos_ret_jap_1m)
+length(log_neg_ret_jap_1m)
+
+length(log_pos_ret_jap_5m)
+length(log_neg_ret_jap_5m)
+
+length(log_pos_ret_jap_15m)
+length(log_neg_ret_jap_15m)
+
+length(log_pos_ret_jap_30m)
+length(log_neg_ret_jap_30m)
+
+length(log_pos_ret_jap_1h)
+length(log_neg_ret_jap_1h)
+```
+
+# FTSE 100
+
+```{r}
+uk_10s <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_10s.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_10s <- diff(log(as.numeric(ts(uk_10s[6]))))
+log_pos_ret_uk_10s <- log_ret_uk_10s[log_ret_uk_10s>0]
+log_neg_ret_uk_10s <- abs(log_ret_uk_10s[log_ret_uk_10s<0])
+vol_uk_10s <- as.numeric(ts(uk_10s[7]))
+
+uk_1m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_1m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_1m <- diff(log(as.numeric(ts(uk_1m[6]))))
+log_pos_ret_uk_1m <- log_ret_uk_1m[log_ret_uk_1m>0]
+log_neg_ret_uk_1m <- abs(log_ret_uk_1m[log_ret_uk_1m<0])
+vol_uk_1m <- as.numeric(ts(uk_1m[7]))
+
+uk_5m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_5m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_5m <- diff(log(as.numeric(ts(uk_5m[6]))))
+log_pos_ret_uk_5m <- log_ret_uk_5m[log_ret_uk_5m>0]
+log_neg_ret_uk_5m <- abs(log_ret_uk_5m[log_ret_uk_5m<0])
+vol_uk_5m <- as.numeric(ts(uk_5m[7]))
+
+
+uk_15m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_15m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_15m <- diff(log(as.numeric(ts(uk_15m[6]))))
+log_pos_ret_uk_15m <- log_ret_uk_15m[log_ret_uk_15m>0]
+log_neg_ret_uk_15m <- abs(log_ret_uk_15m[log_ret_uk_15m<0])
+vol_uk_15m <- as.numeric(ts(uk_15m[7]))
+
+uk_30m <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_30m.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_30m <- diff(log(as.numeric(ts(uk_30m[6]))))
+log_pos_ret_uk_30m <- log_ret_uk_30m[log_ret_uk_30m>0]
+log_neg_ret_uk_30m <- abs(log_ret_uk_30m[log_ret_uk_30m<0])
+vol_uk_30m <- as.numeric(ts(uk_30m[7]))
+
+uk_1h <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_1h.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_1h <- diff(log(as.numeric(ts(uk_1h[6]))))
+log_pos_ret_uk_1h <- log_ret_uk_1h[log_ret_uk_1h>0]
+log_neg_ret_uk_1h <- abs(log_ret_uk_1h[log_ret_uk_1h<0])
+vol_uk_1h <- as.numeric(ts(uk_1h[7]))
+
+uk_4h <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_4h.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_4h <- diff(log(as.numeric(ts(uk_4h[6]))))
+log_pos_ret_uk_4h <- log_ret_uk_4h[log_ret_uk_4h>0]
+log_neg_ret_uk_4h <- abs(log_ret_uk_4h[log_ret_uk_4h<0])
+vol_uk_4h <- as.numeric(ts(uk_4h[7]))
+
+uk_12h <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_12h.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_12h <- diff(log(as.numeric(ts(uk_12h[6]))))
+log_pos_ret_uk_12h <- log_ret_uk_12h[log_ret_uk_12h>0]
+log_neg_ret_uk_12h <- abs(log_ret_uk_12h[log_ret_uk_12h<0])
+vol_uk_12h <- as.numeric(ts(uk_12h[7]))
+
+uk_1d <- read_csv("C:/Users/Iker/Desktop/TFM/DATOS TFM/FTSE 100/GBRIDXGBP_1d.csv",
+                    col_types = cols(Date = col_date(format = "%Y%m%d"),
+                    Timestamp = col_time(format = "%H:%M:%S"),
+                    Volume = col_double()))
+
+log_ret_uk_1d <- diff(log(as.numeric(ts(uk_1d[6]))))
+log_pos_ret_uk_1d <- log_ret_uk_1d[log_ret_uk_1d>0]
+log_neg_ret_uk_1d <- abs(log_ret_uk_1d[log_ret_uk_1d<0])
+vol_uk_1d <- as.numeric(ts(uk_1d[7]))
+
+length(log_pos_ret_uk_10s)
+length(log_neg_ret_uk_10s)
+
+length(log_pos_ret_uk_1m)
+length(log_neg_ret_uk_1m)
+
+length(log_pos_ret_uk_5m)
+length(log_neg_ret_uk_5m)
+
+length(log_pos_ret_uk_15m)
+length(log_neg_ret_uk_15m)
+
+length(log_pos_ret_uk_30m)
+length(log_neg_ret_uk_30m)
+
+length(log_pos_ret_uk_1h)
+length(log_neg_ret_uk_1h)
+```
+
+# 1st Application: Stock Returns
+
+## Analysis for Nikkei 225
+
+### Time Series Analysis
+
+```{r}
+#### 10s
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_10s,main="Nikkei 225")
+pacf(log_ret_jap_10s,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_10s,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_10s,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_10s,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_10s,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_10s, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_10s, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_10s, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_10s, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_10s, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_10s, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_10s, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_10s, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_10s, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_10s, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_10s, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_10s, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_10s, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_10s, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_10s, lag = 20, type = c("Ljung-Box"))
+
+#### 1m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_1m,main="Nikkei 225")
+pacf(log_ret_jap_1m,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_1m,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_1m,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_1m,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_1m,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_1m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_1m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_1m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1m, lag = 20, type = c("Ljung-Box"))
+
+#### 5m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_5m,main="Nikkei 225")
+pacf(log_ret_jap_5m,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_5m,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_5m,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_5m,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_5m,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_5m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_5m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_5m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_5m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_5m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_5m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_5m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_5m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_5m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_5m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_5m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_5m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_5m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_5m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_5m, lag = 20, type = c("Ljung-Box"))
+
+#### 15m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_15m,main="Nikkei 225")
+pacf(log_ret_jap_15m,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_15m,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_15m,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_15m,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_15m,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_15m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_15m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_15m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_15m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_15m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_15m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_15m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_15m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_15m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_15m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_15m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_15m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_15m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_15m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_15m, lag = 20, type = c("Ljung-Box"))
+
+#### 30m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_30m,main="Nikkei 225")
+pacf(log_ret_jap_30m,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_30m,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_30m,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_30m,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_30m,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_30m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_30m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_30m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_30m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_30m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_30m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_30m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_30m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_30m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_30m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_30m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_30m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_30m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_30m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_30m, lag = 20, type = c("Ljung-Box"))
+
+#### 1h
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_1h,main="Nikkei 225")
+pacf(log_ret_jap_1h,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_1h,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_1h,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_1h,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_1h,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_1h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_1h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_1h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_1h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_1h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_1h, lag = 20, type = c("Ljung-Box"))
+
+#### 4h
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_jap_4h,main="Nikkei 225")
+pacf(log_ret_jap_4h,main="Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_jap_4h,main="Positive Returns Nikkei 225")
+pacf(log_pos_ret_jap_4h,main="Positive Returns Nikkei 225")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_jap_4h,main="Positive Returns Nikkei 225")
+pacf(log_neg_ret_jap_4h,main="Positive Returns Nikkei 225")
+
+# Independence of lags
+
+Box.test(log_ret_jap_4h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_jap_4h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_jap_4h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_jap_4h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_jap_4h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_jap_4h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_4h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_4h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_4h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_jap_4h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_jap_4h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_4h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_4h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_4h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_jap_4h, lag = 20, type = c("Ljung-Box"))
+```
+
+### For 10s
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_jap_10s)
+summary(log_neg_ret_jap_10s)
+
+# QQ-plot
+
+qqnorm(log_ret_jap_10s,main="Normal Q-Q Plot for 10s for Nikkei 225")
+qqline(log_ret_jap_10s)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_jap_10s,xlim=c(0,0.001),breaks=100,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_jap_10s,xlim=c(0,0.001),breaks=50,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_jap_10s,log="xy",
+         main="Right Tail Plot of Log-returns for 10s")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_jap_10s,log="xy",
+main="Left Tail Plot of Log-returns for 10s")
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_jap_10s=seq(0.0005,0.001,0.00005)
+
+modPL_pos_ret_jap10s=conpl$new(log_pos_ret_jap_10s)
+est=estimate_xmin(modPL_pos_ret_jap10s,xmin_pos_jap_10s)
+modPL_pos_ret_jap10s$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_jap_10s[log_pos_ret_jap_10s>=est$xmin]))
+sigma
+
+final_modPL_pos_jap_10s = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_jap_10s) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_jap_10s
+
+lnormal=conlnorm$new(log_pos_ret_jap_10s)
+estnorm=estimate_xmin(lnormal,xmin_pos_jap_10s)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_jap10s,main="Right Tailplot PL for 10s",
+       xlab="Positive Log-returns Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_pos_ret_jap10s$dat)*1.5))
+lines(modPL_pos_ret_jap10s, col="green",lwd=1)
+
+# Negative
+
+xmin_neg_jap_10s=seq(0.0005,0.001,0.00005)
+
+modPL_neg_ret_jap10s=conpl$new(log_neg_ret_jap_10s)
+est=estimate_xmin(modPL_neg_ret_jap10s,xmin_neg_jap_10s)
+modPL_neg_ret_jap10s$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_jap_10s[log_neg_ret_jap_10s>=est$xmin]))
+sigma
+
+final_modPL_neg_jap_10s = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_jap_10s) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_jap_10s
+
+lnormal=conlnorm$new(log_neg_ret_jap_10s)
+estnorm=estimate_xmin(lnormal,xmin_neg_jap_10s)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_jap10s,main="Left Tailplot PL for 10s",
+       xlab="Negative Log-returns Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_neg_ret_jap10s$dat)*1.5))
+lines(modPL_neg_ret_jap10s, col="green",lwd=1)
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_jap_10s = c()
+GPD_scale_jap_10s = c()
+error = c()
+l = length(xmin_pos_jap_10s)
+ks_stat_jap_10s = c()
+s_pval_jap_10s = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_jap_10s[i]
+  GPD_mod_jap_10s=gpd(log_pos_ret_jap_10s,u,method="ml")
+  GPD_shape_jap_10s[i]=GPD_mod_jap_10s$par.ests[1]
+  GPD_scale_jap_10s[i]=GPD_mod_jap_10s$par.ests[2]
+  error[i] = GPD_mod_jap_10s$par.ses[1]
+  GPD_sim_pos_jap_10s = evir::rgpd(10000,xi=GPD_shape_jap_10s[i],
+                           beta=GPD_scale_jap_10s[i])
+  ks_stat_jap_10s[i] =ks.test(unique(log_pos_ret_jap_10s),
+                             unique(GPD_sim_pos_jap_10s))$statistic
+  s_pval_jap_10s[i] =ks.test(unique(log_pos_ret_jap_10s),
+                             unique(GPD_sim_pos_jap_10s),exact=NULL)$p.value
+}
+
+me_pos_jap_10s = as.data.frame(matrix(c(GPD_shape_jap_10s,
+                 GPD_scale_jap_10s,error,ks_stat_jap_10s,s_pval_jap_10s),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_jap_10s)=c(paste0("u = ",as.character(xmin_pos_jap_10s)))
+colnames(me_pos_jap_10s)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_jap_10s
+
+u = xmin_pos_jap_10s[2]
+GPD_mod_jap_10s=gpd(log_pos_ret_jap_10s,u,method="ml")
+
+tailplot_i(GPD_mod_jap_10s,optlog = "xy",main="Right Tailplot GPD for 10s",xlab="Positive Log-returns for Nikkei 225 (on log scale)",
+           ylab="1-F(x) on log scale")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap10s$xmin
+x = seq(xmin,max(log_pos_ret_jap_10s), length.out=10000)
+data = log_pos_ret_jap_10s
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.00575))
+lines(modPL_pos_ret_jap10s, type="l", col="green")
+tp(GPD_mod_jap_10s,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 10s")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap10s$xmin
+x = seq(xmin,max(log_pos_ret_jap_10s), length.out=10000)
+data = log_pos_ret_jap_10s
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,xmin))
+lines(modPL_pos_ret_jap10s, type="l", col="green")
+tp(GPD_mod_jap_10s,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 10s")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_jap_10s = c()
+GPD_scale_jap_10s = c()
+error = c()
+l = length(xmin_neg_jap_10s)
+ks_stat_jap_10s = c()
+s_pval_jap_10s = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_jap_10s[i]
+  GPD_mod_jap_10s=gpd(log_neg_ret_jap_10s,u,method="ml")
+  GPD_shape_jap_10s[i]=GPD_mod_jap_10s$par.ests[1]
+  GPD_scale_jap_10s[i]=GPD_mod_jap_10s$par.ests[2]
+  error[i] = GPD_mod_jap_10s$par.ses[1]
+  GPD_sim_pos_jap_10s = evir::rgpd(10000,xi=GPD_shape_jap_10s[i],
+                           beta=GPD_scale_jap_10s[i])
+  ks_stat_jap_10s[i] =ks.test(unique(log_neg_ret_jap_10s),
+                             unique(GPD_sim_pos_jap_10s))$statistic
+  s_pval_jap_10s[i] =ks.test(unique(log_neg_ret_jap_10s),
+                             unique(GPD_sim_pos_jap_10s),exact=NULL)$p.value
+}
+
+me_neg_jap_10s = as.data.frame(matrix(c(GPD_shape_jap_10s,
+                 GPD_scale_jap_10s,error,ks_stat_jap_10s,s_pval_jap_10s),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_jap_10s)=c(paste0("u = ",as.character(xmin_pos_jap_10s)))
+colnames(me_neg_jap_10s)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_jap_10s
+
+u = xmin_neg_jap_10s[3]
+GPD_mod_jap_10s=gpd(log_neg_ret_jap_10s,u,method="ml")
+
+tailplot_i(GPD_mod_jap_10s,optlog = "xy",main="Left Tailplot GPD for 10s",xlab="Negative Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) on log scale")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap10s$xmin
+x = seq(xmin,max(log_neg_ret_jap_10s), length.out=10000)
+data = log_neg_ret_jap_10s
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.00375))
+lines(modPL_neg_ret_jap10s, type="l", col="green")
+
+tp(GPD_mod_jap_10s,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 10s")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap10s$xmin
+x = seq(xmin,max(log_neg_ret_jap_10s), length.out=10000)
+data = log_neg_ret_jap_10s
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0018))
+lines(modPL_neg_ret_jap10s, type="l", col="green")
+
+tp(GPD_mod_jap_10s,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 10s")
+```
+
+### For 1m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_jap_1m)
+summary(log_neg_ret_jap_1m)
+
+# QQ-plot
+
+qqnorm(log_ret_jap_1m,main="Normal Q-Q Plot for 1m for Nikkei 225")
+qqline(log_ret_jap_1m)
+abline(0,1)
+u
+# histograms & plots
+
+hist(log_pos_ret_jap_1m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_jap_1m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_jap_1m,log="xy",
+         main="Right Tail Plot of Log-returns for 1m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_jap_1m,log="xy",
+         main="Left Tail Plot of Log-returns for 1m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_jap_1m)
+evir::meplot(log_neg_ret_jap_1m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_jap_1m,xlim=c(0,5000))
+evir::hill(log_neg_ret_jap_1m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_jap_1m=seq(0.0005,0.001,0.00005)
+
+modPL_pos_ret_jap1m=conpl$new(log_pos_ret_jap_1m)
+est=estimate_xmin(modPL_pos_ret_jap1m,xmin_pos_jap_1m)
+modPL_pos_ret_jap1m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_jap_1m[log_pos_ret_jap_1m>=est$xmin]))
+sigma
+
+final_modPL_pos_jap_1m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_jap_1m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_jap_1m
+
+lnormal=conlnorm$new(log_pos_ret_jap_1m)
+estnorm=estimate_xmin(lnormal,xmin_pos_jap_1m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_jap1m,main="Right Tailplot PL for 1m",
+       xlab="Positive Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_pos_ret_jap1m$dat)*1.5))
+lines(modPL_pos_ret_jap1m, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_jap_1m=seq(0.0005,0.001,0.00005)
+
+modPL_neg_ret_jap1m=conpl$new(log_neg_ret_jap_1m)
+est=estimate_xmin(modPL_neg_ret_jap1m,xmin_neg_jap_1m)
+modPL_neg_ret_jap1m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_jap_1m[log_neg_ret_jap_1m>=est$xmin]))
+sigma
+
+final_modPL_neg_jap_1m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_jap_1m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_jap_1m
+
+lnormal=conlnorm$new(log_neg_ret_jap_1m)
+estnorm=estimate_xmin(lnormal,xmin_neg_jap_1m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_jap1m,main="Left Tailplot PL for 1m",
+       xlab="Negative Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_neg_ret_jap1m$dat)*1.5))
+lines(modPL_neg_ret_jap1m, col="green",lwd=1)
+
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_jap_1m = c()
+GPD_scale_jap_1m = c()
+error = c()
+l = length(xmin_pos_jap_1m)
+ks_stat_jap_1m = c()
+s_pval_jap_1m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_jap_1m[i]
+  GPD_mod_jap_1m=gpd(log_pos_ret_jap_1m,u,method="ml")
+  GPD_shape_jap_1m[i]=GPD_mod_jap_1m$par.ests[1]
+  GPD_scale_jap_1m[i]=GPD_mod_jap_1m$par.ests[2]
+  error[i] = GPD_mod_jap_1m$par.ses[1]
+  GPD_sim_pos_jap_1m = evir::rgpd(10000,xi=GPD_shape_jap_1m[i],
+                           beta=GPD_scale_jap_1m[i])
+  ks_stat_jap_1m[i] =ks.test(unique(log_pos_ret_jap_1m),
+                             unique(GPD_sim_pos_jap_1m))$statistic
+  s_pval_jap_1m[i] =ks.test(unique(log_pos_ret_jap_1m),
+                             unique(GPD_sim_pos_jap_1m),exact=NULL)$p.value
+}
+
+me_pos_jap_1m = as.data.frame(matrix(c(GPD_shape_jap_1m,
+                 GPD_scale_jap_1m,error,ks_stat_jap_1m,s_pval_jap_1m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_jap_1m)=c(paste0("u = ",as.character(xmin_pos_jap_1m)))
+colnames(me_pos_jap_1m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_jap_1m
+
+u = xmin_pos_jap_1m[6]
+GPD_mod_jap_1m=gpd(log_pos_ret_jap_1m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_1m,optlog = "xy",main="Right Tailplot GPD for 1m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap1m$xmin
+x = seq(xmin,max(log_pos_ret_jap_1m), length.out=10000)
+data = log_pos_ret_jap_1m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.02175))
+lines(modPL_pos_ret_jap1m, type="l", col="green")
+tp(GPD_mod_jap_1m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap1m$xmin
+x = seq(xmin,max(log_pos_ret_jap_1m), length.out=10000)
+data = log_pos_ret_jap_1m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0135))
+lines(modPL_pos_ret_jap1m, type="l", col="green")
+tp(GPD_mod_jap_1m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_jap_1m = c()
+GPD_scale_jap_1m = c()
+error = c()
+l = length(xmin_neg_jap_1m)
+ks_stat_jap_1m = c()
+s_pval_jap_1m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_jap_1m[i]
+  GPD_mod_jap_1m=gpd(log_neg_ret_jap_1m,u,method="ml")
+  GPD_shape_jap_1m[i]=GPD_mod_jap_1m$par.ests[1]
+  GPD_scale_jap_1m[i]=GPD_mod_jap_1m$par.ests[2]
+  error[i] = GPD_mod_jap_1m$par.ses[1]
+  GPD_sim_pos_jap_1m = evir::rgpd(10000,xi=GPD_shape_jap_1m[i],
+                           beta=GPD_scale_jap_1m[i])
+  ks_stat_jap_1m[i] =ks.test(unique(log_neg_ret_jap_1m),
+                             unique(GPD_sim_pos_jap_1m))$statistic
+  s_pval_jap_1m[i] =ks.test(unique(log_neg_ret_jap_1m),
+                             unique(GPD_sim_pos_jap_1m),exact=NULL)$p.value
+}
+
+me_neg_jap_1m = as.data.frame(matrix(c(GPD_shape_jap_1m,
+                 GPD_scale_jap_1m,error,ks_stat_jap_1m,s_pval_jap_1m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_jap_1m)=c(paste0("u = ",as.character(xmin_pos_jap_1m)))
+colnames(me_neg_jap_1m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_jap_1m
+
+u = xmin_neg_jap_1m[2]
+GPD_mod_jap_1m=gpd(log_neg_ret_jap_1m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_1m,optlog = "xy",main="Left Tailplot GPD for 1m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap1m$xmin
+x = seq(xmin,max(log_neg_ret_jap_1m), length.out=10000)
+data = log_neg_ret_jap_1m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.06))
+lines(modPL_neg_ret_jap1m, type="l", col="green")
+
+tp(GPD_mod_jap_1m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap1m$xmin
+x = seq(xmin,max(log_neg_ret_jap_1m), length.out=10000)
+data = log_neg_ret_jap_1m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.009))
+lines(modPL_neg_ret_jap1m, type="l", col="green")
+
+tp(GPD_mod_jap_1m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1m")
+
+```
+
+### For 5m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_jap_5m)
+summary(log_neg_ret_jap_5m)
+
+# QQ-plot
+
+qqnorm(log_ret_jap_5m,main="Normal Q-Q Plot for 5m for Nikkei 225")
+qqline(log_ret_jap_5m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_jap_5m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_jap_5m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_jap_5m,log="xy",
+         main="Right Tail Plot of Log-returns for 5m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_jap_5m,log="xy",
+         main="Left Tail Plot of Log-returns for 5m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_jap_5m)
+evir::meplot(log_neg_ret_jap_5m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_jap_5m,xlim=c(0,5000))
+evir::hill(log_neg_ret_jap_5m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_jap_5m=seq(0.0005,0.002,0.00005)
+
+modPL_pos_ret_jap5m=conpl$new(log_pos_ret_jap_5m)
+est=estimate_xmin(modPL_pos_ret_jap5m,xmin_pos_jap_5m)
+modPL_pos_ret_jap5m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_jap_5m[log_pos_ret_jap_5m>=est$xmin]))
+sigma
+
+final_modPL_pos_jap_5m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_jap_5m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_jap_5m
+
+lnormal=conlnorm$new(log_pos_ret_jap_5m)
+estnorm=estimate_xmin(lnormal,xmin_pos_jap_5m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_jap5m,main="Right Tailplot PL for 5m",
+       xlab="Positive Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_pos_ret_jap5m$dat)*1.5))
+lines(modPL_pos_ret_jap5m, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_jap_5m=seq(0.0005,0.002,0.00005)
+
+modPL_neg_ret_jap5m=conpl$new(log_neg_ret_jap_5m)
+est=estimate_xmin(modPL_neg_ret_jap5m,xmin_neg_jap_5m)
+modPL_neg_ret_jap5m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_jap_5m[log_neg_ret_jap_5m>=est$xmin]))
+sigma
+
+final_modPL_neg_jap_5m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_jap_5m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_jap_5m
+
+lnormal=conlnorm$new(log_neg_ret_jap_5m)
+estnorm=estimate_xmin(lnormal,xmin_neg_jap_5m)
+lnormal$setXmin(estnorm)
+
+
+plot(modPL_neg_ret_jap5m,main="Left Tailplot PL for 5m",
+       xlab="Negative Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_neg_ret_jap5m$dat)*1.5))
+lines(modPL_neg_ret_jap5m, col="green",lwd=1)
+
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_jap_5m = c()
+GPD_scale_jap_5m = c()
+error = c()
+l = length(xmin_pos_jap_5m)
+ks_stat_jap_5m = c()
+s_pval_jap_5m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_jap_5m[i]
+  GPD_mod_jap_5m=gpd(log_pos_ret_jap_5m,u,method="ml")
+  GPD_shape_jap_5m[i]=GPD_mod_jap_5m$par.ests[1]
+  GPD_scale_jap_5m[i]=GPD_mod_jap_5m$par.ests[2]
+  error[i] = GPD_mod_jap_5m$par.ses[1]
+  GPD_sim_pos_jap_5m = evir::rgpd(10000,xi=GPD_shape_jap_5m[i],
+                           beta=GPD_scale_jap_5m[i])
+  ks_stat_jap_5m[i] =ks.test(unique(log_pos_ret_jap_5m),
+                             unique(GPD_sim_pos_jap_5m))$statistic
+  s_pval_jap_5m[i] =ks.test(unique(log_pos_ret_jap_5m),
+                             unique(GPD_sim_pos_jap_5m),exact=NULL)$p.value
+}
+
+me_pos_jap_5m = as.data.frame(matrix(c(GPD_shape_jap_5m,
+                 GPD_scale_jap_5m,error,ks_stat_jap_5m,s_pval_jap_5m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_jap_5m)=c(paste0("u = ",as.character(xmin_pos_jap_5m)))
+colnames(me_pos_jap_5m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_jap_5m
+
+u = xmin_pos_jap_5m[13]
+GPD_mod_jap_5m=gpd(log_pos_ret_jap_5m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_5m,optlog = "xy",main="Right Tailplot GPD for 5m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap5m$xmin
+x = seq(xmin,max(log_pos_ret_jap_5m), length.out=10000)
+data = log_pos_ret_jap_5m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.065))
+lines(modPL_pos_ret_jap5m, type="l", col="green")
+tp(GPD_mod_jap_5m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 5m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap5m$xmin
+x = seq(xmin,max(log_pos_ret_jap_5m), length.out=10000)
+data = log_pos_ret_jap_5m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.04))
+lines(modPL_pos_ret_jap5m, type="l", col="green")
+tp(GPD_mod_jap_5m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 5m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_jap_5m = c()
+GPD_scale_jap_5m = c()
+error = c()
+l = length(xmin_neg_jap_5m)
+ks_stat_jap_5m = c()
+s_pval_jap_5m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_jap_5m[i]
+  GPD_mod_jap_5m=gpd(log_neg_ret_jap_5m,u,method="ml")
+  GPD_shape_jap_5m[i]=GPD_mod_jap_5m$par.ests[1]
+  GPD_scale_jap_5m[i]=GPD_mod_jap_5m$par.ests[2]
+  error[i] = GPD_mod_jap_5m$par.ses[1]
+  GPD_sim_pos_jap_5m = evir::rgpd(10000,xi=GPD_shape_jap_5m[i],
+                           beta=GPD_scale_jap_5m[i])
+  ks_stat_jap_5m[i] =ks.test(unique(log_neg_ret_jap_5m),
+                             unique(GPD_sim_pos_jap_5m))$statistic
+  s_pval_jap_5m[i] =ks.test(unique(log_neg_ret_jap_5m),
+                             unique(GPD_sim_pos_jap_5m),exact=NULL)$p.value
+}
+
+me_neg_jap_5m = as.data.frame(matrix(c(GPD_shape_jap_5m,
+                 GPD_scale_jap_5m,error,ks_stat_jap_5m,s_pval_jap_5m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_jap_5m)=c(paste0("u = ",as.character(xmin_pos_jap_5m)))
+colnames(me_neg_jap_5m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_jap_5m
+
+u = xmin_neg_jap_5m[4]
+GPD_mod_jap_5m=gpd(log_neg_ret_jap_5m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_5m,optlog = "xy",main="Left Tailplot GPD for 5m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap5m$xmin
+x = seq(xmin,max(log_neg_ret_jap_5m), length.out=10000)
+data = log_neg_ret_jap_5m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.2))
+lines(modPL_neg_ret_jap5m, type="l", col="green")
+
+tp(GPD_mod_jap_5m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 5m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap5m$xmin
+x = seq(xmin,max(log_neg_ret_jap_5m), length.out=10000)
+data = log_neg_ret_jap_5m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0325))
+lines(modPL_neg_ret_jap5m, type="l", col="green")
+
+tp(GPD_mod_jap_5m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 5m")
+
+```
+
+### For 15m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_jap_15m)
+summary(log_neg_ret_jap_15m)
+
+# QQ-plot
+
+qqnorm(log_ret_jap_15m,main="Normal Q-Q Plot for 15m for Nikkei 225")
+qqline(log_ret_jap_15m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_jap_15m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_jap_15m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_jap_15m,log="xy",
+         main="Right Tail Plot of Log-returns for 15m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_jap_15m,log="xy",
+         main="Left Tail Plot of Log-returns for 15m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_jap_15m)
+evir::meplot(log_neg_ret_jap_15m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_jap_15m,xlim=c(0,5000))
+evir::hill(log_neg_ret_jap_15m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_jap_15m=seq(0.0005,0.0025,0.00005)
+
+modPL_pos_ret_jap15m=conpl$new(log_pos_ret_jap_15m)
+est=estimate_xmin(modPL_pos_ret_jap15m,xmin_pos_jap_15m)
+modPL_pos_ret_jap15m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_jap_15m[log_pos_ret_jap_15m>=est$xmin]))
+sigma
+
+final_modPL_pos_jap_15m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_jap_15m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_jap_15m
+
+lnormal=conlnorm$new(log_pos_ret_jap_15m)
+estnorm=estimate_xmin(lnormal,xmin_pos_jap_15m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_jap15m,main="Right Tailplot PL for 15m",
+       xlab="Positive Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_pos_ret_jap15m$dat)*1.5))
+lines(modPL_pos_ret_jap15m, col="green",lwd=1)
+
+# Negative
+
+xmin_neg_jap_15m=seq(0.0005,0.0025,0.00005)
+
+modPL_neg_ret_jap15m=conpl$new(log_neg_ret_jap_15m)
+est=estimate_xmin(modPL_neg_ret_jap15m,xmin_neg_jap_15m)
+modPL_neg_ret_jap15m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_jap_15m[log_neg_ret_jap_15m>=est$xmin]))
+sigma
+
+final_modPL_neg_jap_15m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_jap_15m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_jap_15m
+
+lnormal=conlnorm$new(log_neg_ret_jap_15m)
+estnorm=estimate_xmin(lnormal,xmin_neg_jap_15m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_jap15m,main="Left Tailplot PL for 15m",
+       xlab="Negative Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_neg_ret_jap15m$dat)*1.5))
+lines(modPL_neg_ret_jap15m, col="green",lwd=1)
+
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_jap_15m = c()
+GPD_scale_jap_15m = c()
+error = c()
+l = length(xmin_pos_jap_15m)
+ks_stat_jap_15m = c()
+s_pval_jap_15m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_jap_15m[i]
+  GPD_mod_jap_15m=gpd(log_pos_ret_jap_15m,u,method="ml")
+  GPD_shape_jap_15m[i]=GPD_mod_jap_15m$par.ests[1]
+  GPD_scale_jap_15m[i]=GPD_mod_jap_15m$par.ests[2]
+  error[i] = GPD_mod_jap_15m$par.ses[1]
+  GPD_sim_pos_jap_15m = evir::rgpd(10000,xi=GPD_shape_jap_15m[i],
+                           beta=GPD_scale_jap_15m[i])
+  ks_stat_jap_15m[i] =ks.test(unique(log_pos_ret_jap_15m),
+                             unique(GPD_sim_pos_jap_15m))$statistic
+  s_pval_jap_15m[i] =ks.test(unique(log_pos_ret_jap_15m),
+                             unique(GPD_sim_pos_jap_15m),exact=NULL)$p.value
+}
+
+me_pos_jap_15m = as.data.frame(matrix(c(GPD_shape_jap_15m,
+                 GPD_scale_jap_15m,error,ks_stat_jap_15m,s_pval_jap_15m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_jap_15m)=c(paste0("u = ",as.character(xmin_pos_jap_15m)))
+colnames(me_pos_jap_15m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_jap_15m
+
+u = xmin_pos_jap_15m[10]
+GPD_mod_jap_15m=gpd(log_pos_ret_jap_15m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_15m,optlog = "xy",main="Right Tailplot GPD for 15m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap15m$xmin
+x = seq(xmin,max(log_pos_ret_jap_15m), length.out=10000)
+data = log_pos_ret_jap_15m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.265))
+lines(modPL_pos_ret_jap15m, type="l", col="green")
+tp(GPD_mod_jap_15m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 15m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap15m$xmin
+x = seq(xmin,max(log_pos_ret_jap_15m), length.out=10000)
+data = log_pos_ret_jap_15m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.065))
+lines(modPL_pos_ret_jap15m, type="l", col="green")
+tp(GPD_mod_jap_15m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 15m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_jap_15m = c()
+GPD_scale_jap_15m = c()
+error = c()
+l = length(xmin_neg_jap_15m)
+ks_stat_jap_15m = c()
+s_pval_jap_15m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_jap_15m[i]
+  GPD_mod_jap_15m=gpd(log_neg_ret_jap_15m,u,method="ml")
+  GPD_shape_jap_15m[i]=GPD_mod_jap_15m$par.ests[1]
+  GPD_scale_jap_15m[i]=GPD_mod_jap_15m$par.ests[2]
+  error[i] = GPD_mod_jap_15m$par.ses[1]
+  GPD_sim_pos_jap_15m = evir::rgpd(10000,xi=GPD_shape_jap_15m[i],
+                           beta=GPD_scale_jap_15m[i])
+  ks_stat_jap_15m[i] =ks.test(unique(log_neg_ret_jap_15m),
+                             unique(GPD_sim_pos_jap_15m))$statistic
+  s_pval_jap_15m[i] =ks.test(unique(log_neg_ret_jap_15m),
+                             unique(GPD_sim_pos_jap_15m),exact=NULL)$p.value
+}
+
+me_neg_jap_15m = as.data.frame(matrix(c(GPD_shape_jap_15m,
+                 GPD_scale_jap_15m,error,ks_stat_jap_15m,s_pval_jap_15m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_jap_15m)=c(paste0("u = ",as.character(xmin_pos_jap_15m)))
+colnames(me_neg_jap_15m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_jap_15m
+
+u = xmin_neg_jap_15m[13]
+GPD_mod_jap_15m=gpd(log_neg_ret_jap_15m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_15m,optlog = "xy",main="Left Tailplot GPD for 15m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap15m$xmin
+x = seq(xmin,max(log_neg_ret_jap_15m), length.out=10000)
+data = log_neg_ret_jap_15m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.22))
+lines(modPL_neg_ret_jap15m, type="l", col="green")
+
+tp(GPD_mod_jap_15m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 15m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap15m$xmin
+x = seq(xmin,max(log_neg_ret_jap_15m), length.out=10000)
+data = log_neg_ret_jap_15m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0825))
+lines(modPL_neg_ret_jap15m, type="l", col="green")
+
+tp(GPD_mod_jap_15m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 15m")
+
+```
+
+### For 30m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_jap_30m)
+summary(log_neg_ret_jap_30m)
+
+# QQ-plot
+
+qqnorm(log_ret_jap_30m,main="Normal Q-Q Plot for 30m for Nikkei 225")
+qqline(log_ret_jap_30m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_jap_30m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_jap_30m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_jap_30m,log="xy",
+         main="Right Tail Plot of Log-returns for 30m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_jap_30m,log="xy",
+         main="Left Tail Plot of Log-returns for 30m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_jap_30m)
+evir::meplot(log_neg_ret_jap_30m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_jap_30m,xlim=c(0,5000))
+evir::hill(log_neg_ret_jap_30m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_jap_30m=seq(0.0005,0.003,0.00005)
+
+modPL_pos_ret_jap30m=conpl$new(log_pos_ret_jap_30m)
+est=estimate_xmin(modPL_pos_ret_jap30m,xmin_pos_jap_30m)
+modPL_pos_ret_jap30m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_jap_30m[log_pos_ret_jap_30m>=est$xmin]))
+sigma
+
+final_modPL_pos_jap_30m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_jap_30m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_jap_30m
+
+lnormal=conlnorm$new(log_pos_ret_jap_30m)
+estnorm=estimate_xmin(lnormal,xmin_pos_jap_30m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_jap30m,main="Right Tailplot PL for 30m",
+       xlab="Positive Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_pos_ret_jap30m$dat)*1.5))
+lines(modPL_pos_ret_jap30m, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_jap_30m=seq(0.0005,0.003,0.00005)
+
+modPL_neg_ret_jap30m=conpl$new(log_neg_ret_jap_30m)
+est=estimate_xmin(modPL_neg_ret_jap30m,xmin_neg_jap_30m)
+modPL_neg_ret_jap30m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_jap_30m[log_neg_ret_jap_30m>=est$xmin]))
+sigma
+
+final_modPL_neg_jap_30m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_jap_30m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_jap_30m
+
+lnormal=conlnorm$new(log_neg_ret_jap_30m)
+estnorm=estimate_xmin(lnormal,xmin_neg_jap_30m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_jap30m,main="Left Tailplot PL for 30m",
+       xlab="Negative Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_neg_ret_jap30m$dat)*1.5))
+lines(modPL_neg_ret_jap30m, col="green",lwd=1)
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_jap_30m = c()
+GPD_scale_jap_30m = c()
+error = c()
+l = length(xmin_pos_jap_30m)
+ks_stat_jap_30m = c()
+s_pval_jap_30m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_jap_30m[i]
+  GPD_mod_jap_30m=gpd(log_pos_ret_jap_30m,u,method="ml")
+  GPD_shape_jap_30m[i]=GPD_mod_jap_30m$par.ests[1]
+  GPD_scale_jap_30m[i]=GPD_mod_jap_30m$par.ests[2]
+  error[i] = GPD_mod_jap_30m$par.ses[1]
+  GPD_sim_pos_jap_30m = evir::rgpd(10000,xi=GPD_shape_jap_30m[i],
+                           beta=GPD_scale_jap_30m[i])
+  ks_stat_jap_30m[i] =ks.test(unique(log_pos_ret_jap_30m),
+                             unique(GPD_sim_pos_jap_30m))$statistic
+  s_pval_jap_30m[i] =ks.test(unique(log_pos_ret_jap_30m),
+                             unique(GPD_sim_pos_jap_30m),exact=NULL)$p.value
+}
+
+me_pos_jap_30m = as.data.frame(matrix(c(GPD_shape_jap_30m,
+                 GPD_scale_jap_30m,error,ks_stat_jap_30m,s_pval_jap_30m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_jap_30m)=c(paste0("u = ",as.character(xmin_pos_jap_30m)))
+colnames(me_pos_jap_30m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_jap_30m
+
+u = xmin_pos_jap_30m[36]
+GPD_mod_jap_30m=gpd(log_pos_ret_jap_30m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_30m,optlog = "xy",main="Right Tailplot GPD for 30m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap30m$xmin
+x = seq(xmin,max(log_pos_ret_jap_30m), length.out=10000)
+data = log_pos_ret_jap_30m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.10))
+lines(modPL_pos_ret_jap30m, type="l", col="green")
+tp(GPD_mod_jap_30m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 30m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap30m$xmin
+x = seq(xmin,max(log_pos_ret_jap_30m), length.out=10000)
+data = log_pos_ret_jap_30m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.5))
+lines(modPL_pos_ret_jap30m, type="l", col="green")
+tp(GPD_mod_jap_30m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 30m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_jap_30m = c()
+GPD_scale_jap_30m = c()
+error = c()
+l = length(xmin_neg_jap_30m)
+ks_stat_jap_30m = c()
+s_pval_jap_30m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_jap_30m[i]
+  GPD_mod_jap_30m=gpd(log_neg_ret_jap_30m,u,method="ml")
+  GPD_shape_jap_30m[i]=GPD_mod_jap_30m$par.ests[1]
+  GPD_scale_jap_30m[i]=GPD_mod_jap_30m$par.ests[2]
+  error[i] = GPD_mod_jap_30m$par.ses[1]
+  GPD_sim_pos_jap_30m = evir::rgpd(10000,xi=GPD_shape_jap_30m[i],
+                           beta=GPD_scale_jap_30m[i])
+  ks_stat_jap_30m[i] =ks.test(unique(log_neg_ret_jap_30m),
+                             unique(GPD_sim_pos_jap_30m))$statistic
+  s_pval_jap_30m[i] =ks.test(unique(log_neg_ret_jap_30m),
+                             unique(GPD_sim_pos_jap_30m),exact=NULL)$p.value
+}
+
+me_neg_jap_30m = as.data.frame(matrix(c(GPD_shape_jap_30m,
+                 GPD_scale_jap_30m,error,ks_stat_jap_30m,s_pval_jap_30m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_jap_30m)=c(paste0("u = ",as.character(xmin_pos_jap_30m)))
+colnames(me_neg_jap_30m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_jap_30m
+
+u = xmin_neg_jap_30m[23]
+GPD_mod_jap_30m=gpd(log_neg_ret_jap_30m,u,method="ml")
+
+tailplot_i(GPD_mod_jap_30m,optlog = "xy",main="Left Tailplot GPD for 30m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap30m$xmin
+x = seq(xmin,max(log_neg_ret_jap_30m), length.out=10000)
+data = log_neg_ret_jap_30m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.225))
+lines(modPL_neg_ret_jap30m, type="l", col="green")
+
+tp(GPD_mod_jap_30m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 30m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap30m$xmin
+x = seq(xmin,max(log_neg_ret_jap_30m), length.out=10000)
+data = log_neg_ret_jap_30m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.125))
+lines(modPL_neg_ret_jap30m, type="l", col="green")
+
+tp(GPD_mod_jap_30m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 30m")
+
+```
+
+### For 1h
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_jap_1h)
+summary(log_neg_ret_jap_1h)
+
+# QQ-plot
+
+qqnorm(log_ret_jap_1h,main="Normal Q-Q Plot for 1h for Nikkei 225")
+qqline(log_ret_jap_1h)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_jap_1h,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_jap_1h,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_jap_1h,log="xy",
+         main="Right Tail Plot of Log-returns for 1h")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_jap_1h,log="xy",
+         main="Left Tail Plot of Log-returns for 1h")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_jap_1h)
+evir::meplot(log_neg_ret_jap_1h)
+
+# Hill plot
+
+evir::hill(log_pos_ret_jap_1h,xlim=c(0,5000))
+evir::hill(log_neg_ret_jap_1h)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_jap_1h=seq(0.0005,0.004,0.00005)
+
+modPL_pos_ret_jap1h=conpl$new(log_pos_ret_jap_1h)
+est=estimate_xmin(modPL_pos_ret_jap1h,xmin_pos_jap_1h)
+modPL_pos_ret_jap1h$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_jap_1h[log_pos_ret_jap_1h>=est$xmin]))
+sigma
+
+final_modPL_pos_jap_1h = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_jap_1h) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_jap_1h
+
+lnormal=conlnorm$new(log_pos_ret_jap_1h)
+estnorm=estimate_xmin(lnormal,xmin_pos_jap_1h)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_jap1h,main="Right Tailplot PL for 1h",
+       xlab="Positive Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_pos_ret_jap1h$dat)*1.5))
+lines(modPL_pos_ret_jap1h, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_jap_1h=seq(0.0005,0.004,0.00005)
+
+modPL_neg_ret_jap1h=conpl$new(log_neg_ret_jap_1h)
+est=estimate_xmin(modPL_neg_ret_jap1h,xmin_neg_jap_1h)
+modPL_neg_ret_jap1h$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_jap_1h[log_neg_ret_jap_1h>=est$xmin]))
+sigma
+
+final_modPL_neg_jap_1h = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_jap_1h) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_jap_1h
+
+lnormal=conlnorm$new(log_neg_ret_jap_1h)
+estnorm=estimate_xmin(lnormal,xmin_neg_jap_1h)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_jap1h,main="Left Tailplot PL for 1h",
+       xlab="Negative Log-returns for Nikkei 225 (on log scale)",ylab="1-F(x) (on log scale)",xlim=c(5e-04,max(modPL_neg_ret_jap1h$dat)*1.5))
+lines(modPL_neg_ret_jap1h, col="green",lwd=1)
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_jap_1h = c()
+GPD_scale_jap_1h = c()
+error = c()
+l = length(xmin_pos_jap_1h)
+ks_stat_jap_1h = c()
+s_pval_jap_1h = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_jap_1h[i]
+  GPD_mod_jap_1h=gpd(log_pos_ret_jap_1h,u,method="ml")
+  GPD_shape_jap_1h[i]=GPD_mod_jap_1h$par.ests[1]
+  GPD_scale_jap_1h[i]=GPD_mod_jap_1h$par.ests[2]
+  error[i] = GPD_mod_jap_1h$par.ses[1]
+  GPD_sim_pos_jap_1h = evir::rgpd(10000,xi=GPD_shape_jap_1h[i],
+                           beta=GPD_scale_jap_1h[i])
+  ks_stat_jap_1h[i] =ks.test(unique(log_pos_ret_jap_1h),
+                             unique(GPD_sim_pos_jap_1h))$statistic
+  s_pval_jap_1h[i] =ks.test(unique(log_pos_ret_jap_1h),
+                             unique(GPD_sim_pos_jap_1h),exact=NULL)$p.value
+}
+
+me_pos_jap_1h = as.data.frame(matrix(c(GPD_shape_jap_1h,
+                 GPD_scale_jap_1h,error,ks_stat_jap_1h,s_pval_jap_1h),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_jap_1h)=c(paste0("u = ",as.character(xmin_pos_jap_1h)))
+colnames(me_pos_jap_1h)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_jap_1h
+
+u = xmin_pos_jap_1h[34]
+GPD_mod_jap_1h=gpd(log_pos_ret_jap_1h,u,method="ml")
+
+tailplot_i(GPD_mod_jap_1h,optlog = "xy",main="Right Tailplot GPD for 1h",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap1h$xmin
+x = seq(xmin,max(log_pos_ret_jap_1h), length.out=10000)
+data = log_pos_ret_jap_1h
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.215))
+lines(modPL_pos_ret_jap1h, type="l", col="green")
+tp(GPD_mod_jap_1h,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1h")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_jap1h$xmin
+x = seq(xmin,max(log_pos_ret_jap_1h), length.out=10000)
+data = log_pos_ret_jap_1h
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.14))
+lines(modPL_pos_ret_jap1h, type="l", col="green")
+tp(GPD_mod_jap_1h,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1h")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_jap_1h = c()
+GPD_scale_jap_1h = c()
+error = c()
+l = length(xmin_neg_jap_1h)
+ks_stat_jap_1h = c()
+s_pval_jap_1h = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_jap_1h[i]
+  GPD_mod_jap_1h=gpd(log_neg_ret_jap_1h,u,method="ml")
+  GPD_shape_jap_1h[i]=GPD_mod_jap_1h$par.ests[1]
+  GPD_scale_jap_1h[i]=GPD_mod_jap_1h$par.ests[2]
+  error[i] = GPD_mod_jap_1h$par.ses[1]
+  GPD_sim_pos_jap_1h = evir::rgpd(10000,xi=GPD_shape_jap_1h[i],
+                           beta=GPD_scale_jap_1h[i])
+  ks_stat_jap_1h[i] =ks.test(unique(log_neg_ret_jap_1h),
+                             unique(GPD_sim_pos_jap_1h))$statistic
+  s_pval_jap_1h[i] =ks.test(unique(log_neg_ret_jap_1h),
+                             unique(GPD_sim_pos_jap_1h),exact=NULL)$p.value
+}
+
+me_neg_jap_1h = as.data.frame(matrix(c(GPD_shape_jap_1h,
+                 GPD_scale_jap_1h,error,ks_stat_jap_1h,s_pval_jap_1h),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_jap_1h)=c(paste0("u = ",as.character(xmin_pos_jap_1h)))
+colnames(me_neg_jap_1h)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_jap_1h
+
+u = xmin_neg_jap_1h[2]
+GPD_mod_jap_1h=gpd(log_neg_ret_jap_1h,u,method="ml")
+
+tailplot_i(GPD_mod_jap_1h,optlog = "xy",main="Left Tailplot GPD for 1h",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap1h$xmin
+x = seq(xmin,max(log_neg_ret_jap_1h), length.out=10000)
+data = log_neg_ret_jap_1h
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.68))
+lines(modPL_neg_ret_jap1h, type="l", col="green")
+
+tp(GPD_mod_jap_1h,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1h")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_jap1h$xmin
+x = seq(xmin,max(log_neg_ret_jap_1h), length.out=10000)
+data = log_neg_ret_jap_1h
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.235))
+lines(modPL_neg_ret_jap1h, type="l", col="green")
+
+tp(GPD_mod_jap_1h,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1h")
+
+```
+
+### VaR and ES Computation
+
+```{r}
+################################ PL Fitting ################################
+
+# Positive
+
+alpha_pos_jap=as.numeric(c(final_modPL_pos_jap_10s[2],final_modPL_pos_jap_1m[2],
+                       final_modPL_pos_jap_5m[2],final_modPL_pos_jap_15m[2],
+                       final_modPL_pos_jap_30m[2],final_modPL_pos_jap_1h[2]))
+
+xmin_pos_jap=as.numeric(c(final_modPL_pos_jap_10s[1],final_modPL_pos_jap_1m[1],
+                       final_modPL_pos_jap_5m[1],final_modPL_pos_jap_15m[1],
+                       final_modPL_pos_jap_30m[1],final_modPL_pos_jap_1h[1]))
+
+VaR_pos_jap_PL = vector()
+ES_pos_jap_PL = vector()
+
+set.seed(1234)
+
+for(i in 1:6){
+  x = rplcon(10000, xmin_pos_jap[i], alpha_pos_jap[i])
+  x1 = sort(x)
+  VaR_pos_jap_PL[i] = x1[9900]
+  ES_pos_jap_PL[i] = mean(x[x>VaR_pos_jap_PL[i]])
+}
+
+VaR_pos_jap_PL;ES_pos_jap_PL
+
+# Negative
+
+alpha_neg_jap=as.numeric(c(final_modPL_neg_jap_10s[2],final_modPL_neg_jap_1m[2],
+                       final_modPL_neg_jap_5m[2],final_modPL_neg_jap_15m[2],
+                       final_modPL_neg_jap_30m[2],final_modPL_neg_jap_1h[2]))
+
+xmin_neg_jap=as.numeric(c(final_modPL_neg_jap_10s[1],final_modPL_neg_jap_1m[1],
+                       final_modPL_neg_jap_5m[1],final_modPL_neg_jap_15m[1],
+                       final_modPL_neg_jap_30m[1],final_modPL_neg_jap_1h[1]))
+
+VaR_neg_jap_PL = vector()
+ES_neg_jap_PL = vector()
+
+set.seed(1234)
+
+for(i in 1:6){
+  x = rplcon(10000, xmin_neg_jap[i], alpha_neg_jap[i])
+  x1 = sort(x)
+  VaR_neg_jap_PL[i] = x1[9900]
+  ES_neg_jap_PL[i] = mean(x[x>VaR_neg_jap_PL[i]])
+}
+
+VaR_neg_jap_PL;ES_neg_jap_PL
+
+############################### EVT Fitting ################################
+
+# Positive
+
+xi_pos_jap=as.numeric(c(me_pos_jap_10s[2,1],me_pos_jap_1m[6,1],
+                       me_pos_jap_5m[13,1],me_pos_jap_15m[10,1],
+                       me_pos_jap_30m[36,1],me_pos_jap_1h[34,1]))
+
+beta_pos_jap=as.numeric(c(me_pos_jap_10s[2,2],me_pos_jap_1m[6,2],
+                       me_pos_jap_5m[13,2],me_pos_jap_15m[10,2],
+                       me_pos_jap_30m[36,2],me_pos_jap_1h[34,2]))
+
+u_pos_jap = as.numeric(c(5e-04,5e-04,5e-04,0.0029,0.00105,0.0037))
+
+VaR_pos_jap_GPD = vector()
+ES_pos_jap_GPD = vector()
+
+for(i in 1:6){
+  VaR_pos_jap_GPD[i] = qgpd(0.99,xi = xi_pos_jap[i],mu=0,beta = beta_pos_jap[i])
+  x = rgpd(10000,xi = xi_pos_jap[i],mu=0,beta = beta_pos_jap[i])
+  ES_pos_jap_GPD[i] = mean(x[x>VaR_pos_jap_GPD[i]])
+}
+
+VaR_pos_jap_GPD;ES_pos_jap_GPD
+
+# Negative
+
+xi_neg_jap=as.numeric(c(me_neg_jap_10s[3,1],me_neg_jap_1m[2,1],
+                       me_neg_jap_5m[4,1],me_neg_jap_15m[13,1],
+                       me_neg_jap_30m[23,1],me_neg_jap_1h[2,1]))
+
+beta_neg_jap=as.numeric(c(me_neg_jap_10s[3,2],me_neg_jap_1m[2,2],
+                       me_neg_jap_5m[4,2],me_neg_jap_15m[13,2],
+                       me_neg_jap_30m[23,2],me_neg_jap_1h[2,2]))
+
+u_neg_jap = as.numeric(c(5e-04,5e-04,5e-04,0.0029,0.00105,0.0037))
+
+VaR_neg_jap_GPD = vector()
+ES_neg_jap_GPD = vector()
+
+for(i in 1:6){
+  VaR_neg_jap_GPD[i] = qgpd(0.99,xi = xi_neg_jap[i],mu=0,beta = beta_neg_jap[i])
+  x = rgpd(10000,xi = xi_neg_jap[i],mu=0,beta = beta_neg_jap[i])
+  ES_neg_jap_GPD[i] = mean(x[x>VaR_neg_jap_GPD[i]])
+}
+
+VaR_neg_jap_GPD;ES_neg_jap_GPD
+```
+
+```{r}
+# Positive Nik
+
+length(log_pos_ret_jap_10s[log_pos_ret_jap_10s>=5.5e-04])
+length(log_pos_ret_jap_1m[log_pos_ret_jap_1m>=7.5e-04])
+length(log_pos_ret_jap_5m[log_pos_ret_jap_5m>=1.1e-03])
+length(log_pos_ret_jap_15m[log_pos_ret_jap_15m>=9.5e-04])
+length(log_pos_ret_jap_30m[log_pos_ret_jap_30m>=2.25e-03])
+length(log_pos_ret_jap_1h[log_pos_ret_jap_1h>=2.15e-03])
+
+# Negative Nik
+
+length(log_neg_ret_jap_10s[log_neg_ret_jap_10s>=6e-04])
+length(log_neg_ret_jap_1m[log_neg_ret_jap_1m>=5.5e-04])
+length(log_neg_ret_jap_5m[log_neg_ret_jap_5m>=6.5e-04])
+length(log_neg_ret_jap_15m[log_neg_ret_jap_15m>=1.1e-03])
+length(log_neg_ret_jap_30m[log_neg_ret_jap_30m>=1.6e-03])
+length(log_neg_ret_jap_1h[log_neg_ret_jap_1h>=5.5e-04])
+```
+
+```{r}
+########################### Comparative Graphs PLs #############################
+
+### 10s
+
+# Positive
+
+norm=fitdistr(log_ret_jap_10s,'normal')
+exp=fitdistr(log_pos_ret_jap_10s,'exponential')
+
+a=hist(log(log_pos_ret_jap_10s),breaks=50)
+b=hist(log_pos_ret_jap_10s,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_10s),breaks=50)
+d=hist(log_pos_ret_jap_10s,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_10s)/length(log_pos_ret_jap_10s)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_10s$alpha
+thr_1=final_modPL_pos_jap_10s$xmin
+log_pos_retail_1=log_pos_ret_jap_10s[log_pos_ret_jap_10s>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_10s)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Positive Log-returns for Nikkei 225",main="Right Tail PL Model for 10s")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+# Negative
+
+norm=fitdistr(log_ret_jap_10s,'normal')
+exp=fitdistr(log_neg_ret_jap_10s,'exponential')
+
+a=hist(log(log_neg_ret_jap_10s),breaks=50)
+b=hist(log_neg_ret_jap_10s,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_10s),breaks=50)
+d=hist(log_neg_ret_jap_10s,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_10s)/length(log_neg_ret_jap_10s)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_10s$alpha
+thr_1=final_modPL_neg_jap_10s$xmin
+log_neg_retail_1=log_neg_ret_jap_10s[log_neg_ret_jap_10s>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_10s)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Negative Log-returns for Nikkei 225",main="Left Tail PL Model for 10s")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+### 1m
+
+# Positive
+
+norm=fitdistr(log_ret_jap_1m,'normal')
+exp=fitdistr(log_pos_ret_jap_1m,'exponential')
+
+a=hist(log(log_pos_ret_jap_1m),breaks=50)
+b=hist(log_pos_ret_jap_1m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_1m),breaks=50)
+d=hist(log_pos_ret_jap_1m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_1m)/length(log_pos_ret_jap_1m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_1m$alpha
+thr_1=final_modPL_pos_jap_1m$xmin
+log_pos_retail_1=log_pos_ret_jap_1m[log_pos_ret_jap_1m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_1m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Positive Log-returns for Nikkei 225",main= "Right Tail PL Model for 1m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+
+# Negative
+
+norm=fitdistr(log_ret_jap_1m,'normal')
+exp=fitdistr(log_neg_ret_jap_1m,'exponential')
+
+a=hist(log(log_neg_ret_jap_1m),breaks=50)
+b=hist(log_neg_ret_jap_1m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_1m),breaks=50)
+d=hist(log_neg_ret_jap_1m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_1m)/length(log_neg_ret_jap_1m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_1m$alpha
+thr_1=final_modPL_neg_jap_1m$xmin
+log_neg_retail_1=log_neg_ret_jap_1m[log_neg_ret_jap_1m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_1m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Negative Log-returns for Nikkei 225",main= "Left Tail PL Model for 1m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 5m
+
+# Positive
+
+norm=fitdistr(log_ret_jap_5m,'normal')
+exp=fitdistr(log_pos_ret_jap_5m,'exponential')
+
+a=hist(log(log_pos_ret_jap_5m),breaks=50)
+b=hist(log_pos_ret_jap_5m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_5m),breaks=50)
+d=hist(log_pos_ret_jap_5m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_5m)/length(log_pos_ret_jap_5m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_5m$alpha
+thr_1=final_modPL_pos_jap_5m$xmin
+log_pos_retail_1=log_pos_ret_jap_5m[log_pos_ret_jap_5m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_5m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Positive Log-returns for Nikkei 225",main= "Right Tail PL Model for 5m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+
+# Negative
+
+norm=fitdistr(log_ret_jap_5m,'normal')
+exp=fitdistr(log_neg_ret_jap_5m,'exponential')
+
+a=hist(log(log_neg_ret_jap_5m),breaks=50)
+b=hist(log_neg_ret_jap_5m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_5m),breaks=50)
+d=hist(log_neg_ret_jap_5m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_5m)/length(log_neg_ret_jap_5m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_5m$alpha
+thr_1=final_modPL_neg_jap_5m$xmin
+log_neg_retail_1=log_neg_ret_jap_5m[log_neg_ret_jap_5m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_5m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Negative Log-returns for Nikkei 225",main= "Left Tail PL Model for 5m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+### 15m
+
+# Positive
+
+norm=fitdistr(log_ret_jap_15m,'normal')
+exp=fitdistr(log_pos_ret_jap_15m,'exponential')
+
+a=hist(log(log_pos_ret_jap_15m),breaks=50)
+b=hist(log_pos_ret_jap_15m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_15m),breaks=50)
+d=hist(log_pos_ret_jap_15m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_15m)/length(log_pos_ret_jap_15m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_15m$alpha
+thr_1=final_modPL_pos_jap_15m$xmin
+log_pos_retail_1=log_pos_ret_jap_15m[log_pos_ret_jap_15m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_15m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Positive Log-returns for Nikkei 225",main= "Right Tail PL Model for 15m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+
+# Negative
+
+norm=fitdistr(log_ret_jap_15m,'normal')
+exp=fitdistr(log_neg_ret_jap_15m,'exponential')
+
+a=hist(log(log_neg_ret_jap_15m),breaks=50)
+b=hist(log_neg_ret_jap_15m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_15m),breaks=50)
+d=hist(log_neg_ret_jap_15m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_15m)/length(log_neg_ret_jap_15m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_15m$alpha
+thr_1=final_modPL_neg_jap_15m$xmin
+log_neg_retail_1=log_neg_ret_jap_15m[log_neg_ret_jap_15m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_15m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Negative Log-returns for Nikkei 225",main= "Left Tail PL Model for 15m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+### 30m
+
+# Positive
+
+norm=fitdistr(log_ret_jap_30m,'normal')
+exp=fitdistr(log_pos_ret_jap_30m,'exponential')
+
+a=hist(log(log_pos_ret_jap_30m),breaks=50)
+b=hist(log_pos_ret_jap_30m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_30m),breaks=50)
+d=hist(log_pos_ret_jap_30m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_30m)/length(log_pos_ret_jap_30m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_30m$alpha
+thr_1=final_modPL_pos_jap_30m$xmin
+log_pos_retail_1=log_pos_ret_jap_30m[log_pos_ret_jap_30m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_30m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Positive Log-returns for Nikkei 225",main= "Right Tail PL Model for 30m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+
+# Negative
+
+norm=fitdistr(log_ret_jap_30m,'normal')
+exp=fitdistr(log_neg_ret_jap_30m,'exponential')
+
+a=hist(log(log_neg_ret_jap_30m),breaks=50)
+b=hist(log_neg_ret_jap_30m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_30m),breaks=50)
+d=hist(log_neg_ret_jap_30m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_30m)/length(log_neg_ret_jap_30m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_30m$alpha
+thr_1=final_modPL_neg_jap_30m$xmin
+log_neg_retail_1=log_neg_ret_jap_30m[log_neg_ret_jap_30m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_30m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Negative Log-returns for Nikkei 225",main= "Left Tail PL Model for 30m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 1h
+
+# Positive
+
+norm=fitdistr(log_ret_jap_1h,'normal')
+exp=fitdistr(log_pos_ret_jap_1h,'exponential')
+
+a=hist(log(log_pos_ret_jap_1h),breaks=50)
+b=hist(log_pos_ret_jap_1h,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_1h),breaks=50)
+d=hist(log_pos_ret_jap_1h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_1h)/length(log_pos_ret_jap_1h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_1h$alpha
+thr_1=final_modPL_pos_jap_1h$xmin
+log_pos_retail_1=log_pos_ret_jap_1h[log_pos_ret_jap_1h>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_1h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Positive Log-returns for Nikkei 225",main= "Right Tail PL Model for 1h")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+
+# Negative
+
+norm=fitdistr(log_ret_jap_1h,'normal')
+exp=fitdistr(log_neg_ret_jap_1h,'exponential')
+
+a=hist(log(log_neg_ret_jap_1h),breaks=50)
+b=hist(log_neg_ret_jap_1h,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_1h),breaks=50)
+d=hist(log_neg_ret_jap_1h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_1h)/length(log_neg_ret_jap_1h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_1h$alpha
+thr_1=final_modPL_neg_jap_1h$xmin
+log_neg_retail_1=log_neg_ret_jap_1h[log_neg_ret_jap_1h>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_1h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,2e-02),xlab = "Negative Log-returns for Nikkei 225",main= "Left Tail PL Model for 1h")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+### 4h
+
+# Positive
+
+norm=fitdistr(log_ret_jap_4h,'normal')
+exp=fitdistr(log_pos_ret_jap_4h,'exponential')
+
+a=hist(log(log_pos_ret_jap_4h),breaks=50)
+b=hist(log_pos_ret_jap_4h,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_jap_4h),breaks=50)
+d=hist(log_pos_ret_jap_4h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_4h)/length(log_pos_ret_jap_4h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_jap_4h$alpha
+thr_1=final_modPL_pos_jap_4h$xmin
+log_pos_retail_1=log_pos_ret_jap_4h[log_pos_ret_jap_4h>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_jap_4h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,5e-02),xlab = "Positive Log-returns for Nikkei 225",main= "Right Tail PL Model")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+
+# Negative
+
+norm=fitdistr(log_ret_jap_4h,'normal')
+exp=fitdistr(log_neg_ret_jap_4h,'exponential')
+
+a=hist(log(log_neg_ret_jap_4h),breaks=50)
+b=hist(log_neg_ret_jap_4h,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_jap_4h),breaks=50)
+d=hist(log_neg_ret_jap_4h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_jap_4h)/length(log_neg_ret_jap_4h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_jap_4h$alpha
+thr_1=final_modPL_neg_jap_4h$xmin
+log_neg_retail_1=log_neg_ret_jap_4h[log_neg_ret_jap_4h>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_jap_4h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,5e-02),xlab = "Negative Log-returns for Nikkei 225",main= "Left Tail PL Model")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+```
+
+## Analysis for FTSE 100
+
+### Time Series Analysis
+
+```{r}
+#### 10s
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_10s,main="FTSE 100")
+pacf(log_ret_uk_10s,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_10s,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_10s,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_10s,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_10s,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_10s, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_10s, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_10s, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_10s, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_10s, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_10s, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_10s, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_10s, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_10s, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_10s, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_10s, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_10s, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_10s, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_10s, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_10s, lag = 20, type = c("Ljung-Box"))
+
+#### 1m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_1m,main="FTSE 100")
+pacf(log_ret_uk_1m,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_1m,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_1m,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_1m,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_1m,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_1m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_1m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_1m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1m, lag = 20, type = c("Ljung-Box"))
+
+#### 5m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_5m,main="FTSE 100")
+pacf(log_ret_uk_5m,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_5m,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_5m,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_5m,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_5m,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_5m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_5m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_5m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_5m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_5m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_5m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_5m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_5m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_5m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_5m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_5m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_5m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_5m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_5m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_5m, lag = 20, type = c("Ljung-Box"))
+
+#### 15m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_15m,main="FTSE 100")
+pacf(log_ret_uk_15m,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_15m,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_15m,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_15m,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_15m,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_15m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_15m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_15m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_15m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_15m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_15m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_15m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_15m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_15m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_15m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_15m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_15m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_15m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_15m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_15m, lag = 20, type = c("Ljung-Box"))
+
+#### 30m
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_30m,main="FTSE 100")
+pacf(log_ret_uk_30m,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_30m,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_30m,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_30m,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_30m,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_30m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_30m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_30m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_30m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_30m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_30m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_30m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_30m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_30m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_30m, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_30m, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_30m, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_30m, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_30m, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_30m, lag = 20, type = c("Ljung-Box"))
+
+#### 1h
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_1h,main="FTSE 100")
+pacf(log_ret_uk_1h,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_1h,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_1h,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_1h,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_1h,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_1h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_1h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_1h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_1h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_1h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_1h, lag = 20, type = c("Ljung-Box"))
+
+#### 4h
+
+# ACF & PACF
+
+par(mfrow=c(1,2)) 
+acf(log_ret_uk_4h,main="FTSE 100")
+pacf(log_ret_uk_4h,main="FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_pos_ret_uk_4h,main="Positive Returns FTSE 100")
+pacf(log_pos_ret_uk_4h,main="Positive Returns FTSE 100")
+
+par(mfrow=c(1,2)) 
+acf(log_neg_ret_uk_4h,main="Positive Returns FTSE 100")
+pacf(log_neg_ret_uk_4h,main="Positive Returns FTSE 100")
+
+# Independence of lags
+
+Box.test(log_ret_uk_4h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_ret_uk_4h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_ret_uk_4h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_ret_uk_4h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_ret_uk_4h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_pos_ret_uk_4h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_4h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_4h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_4h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_pos_ret_uk_4h, lag = 20, type = c("Ljung-Box"))
+
+Box.test(log_neg_ret_uk_4h, lag = 1, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_4h, lag = 5, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_4h, lag = 10, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_4h, lag = 15, type = c("Ljung-Box"))
+Box.test(log_neg_ret_uk_4h, lag = 20, type = c("Ljung-Box"))
+```
+
+### For 10s
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_uk_10s)
+summary(log_neg_ret_uk_10s)
+
+# QQ-plot
+
+qqnorm(log_ret_uk_10s,main="Normal Q-Q Plot for 10s for FTSE 100")
+qqline(log_ret_uk_10s)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_uk_10s,xlim=c(0,0.001),breaks=200,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_uk_10s,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_uk_10s,log="xy",
+         main="Right Tail Plot of Log-returns for 10s")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_uk_10s,log="xy",
+         main="Left Tail Plot of Log-returns for 10s")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_uk_10s)
+evir::meplot(log_neg_ret_uk_10s)
+
+# Hill plot
+
+evir::hill(log_pos_ret_uk_10s,xlim=c(0,5000))
+evir::hill(log_neg_ret_uk_10s)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_uk_10s=seq(0.0001,0.001,0.00005)
+
+modPL_pos_ret_uk10s=conpl$new(log_pos_ret_uk_10s)
+est=estimate_xmin(modPL_pos_ret_uk10s,xmin_pos_uk_10s)
+modPL_pos_ret_uk10s$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_uk_10s[log_pos_ret_uk_10s>=est$xmin]))
+sigma
+
+final_modPL_pos_uk_10s = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_uk_10s) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_uk_10s
+
+lnormal=conlnorm$new(log_pos_ret_uk_10s)
+estnorm=estimate_xmin(lnormal,xmin_pos_uk_10s)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_uk10s,main="Right Tailplot PL for 10s",
+       xlab="Positive Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_pos_ret_uk10s, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_uk_10s=seq(0.0001,0.001,0.00005)
+
+modPL_neg_ret_uk10s=conpl$new(log_neg_ret_uk_10s)
+est=estimate_xmin(modPL_neg_ret_uk10s,xmin_neg_uk_10s)
+modPL_neg_ret_uk10s$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_uk_10s[log_neg_ret_uk_10s>=est$xmin]))
+sigma
+
+final_modPL_neg_uk_10s = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_uk_10s) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_uk_10s
+
+lnormal=conlnorm$new(log_neg_ret_uk_10s)
+estnorm=estimate_xmin(lnormal,xmin_neg_uk_10s)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_uk10s,main="Left Tailplot PL for 10s",
+       xlab="Negative Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_neg_ret_uk10s, col="green",lwd=1)
+
+
+##### Hill Method
+
+# Positive
+
+evir::hill(log_pos_ret_uk_10s)
+
+# Negative
+
+evir::hill(log_neg_ret_uk_10s)
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_uk_10s = c()
+GPD_scale_uk_10s = c()
+error = c()
+l = length(xmin_pos_uk_10s)
+ks_stat_uk_10s = c()
+s_pval_uk_10s = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_uk_10s[i]
+  GPD_mod_uk_10s=gpd(log_pos_ret_uk_10s,u,method="ml")
+  GPD_shape_uk_10s[i]=GPD_mod_uk_10s$par.ests[1]
+  GPD_scale_uk_10s[i]=GPD_mod_uk_10s$par.ests[2]
+  error[i] = GPD_mod_uk_10s$par.ses[1]
+  GPD_sim_pos_uk_10s = evir::rgpd(10000,xi=GPD_shape_uk_10s[i],
+                           beta=GPD_scale_uk_10s[i])
+  ks_stat_uk_10s[i] =ks.test(unique(log_pos_ret_uk_10s),
+                             unique(GPD_sim_pos_uk_10s))$statistic
+  s_pval_uk_10s[i] =ks.test(unique(log_pos_ret_uk_10s),
+                             unique(GPD_sim_pos_uk_10s),exact=NULL)$p.value
+}
+
+me_pos_uk_10s = as.data.frame(matrix(c(GPD_shape_uk_10s,
+                 GPD_scale_uk_10s,error,ks_stat_uk_10s,s_pval_uk_10s),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_uk_10s)=c(paste0("u = ",as.character(xmin_pos_uk_10s)))
+colnames(me_pos_uk_10s)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_uk_10s
+
+u = xmin_pos_uk_10s[1]
+GPD_mod_uk_10s=gpd(log_pos_ret_uk_10s,u,method="ml")
+
+tailplot_i(GPD_mod_uk_10s,optlog = "xy",main="Right Tailplot GPD for 10s",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk10s$xmin
+x = seq(xmin,max(log_pos_ret_uk_10s), length.out=10000)
+data = log_pos_ret_uk_10s
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.215))
+lines(modPL_pos_ret_uk10s, type="l", col="green")
+tp(GPD_mod_uk_10s,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 10s")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk10s$xmin
+x = seq(xmin,max(log_pos_ret_uk_10s), length.out=10000)
+data = log_pos_ret_uk_10s
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0011))
+lines(modPL_pos_ret_uk10s, type="l", col="green")
+tp(GPD_mod_uk_10s,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 10s")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_uk_10s = c()
+GPD_scale_uk_10s = c()
+error = c()
+l = length(xmin_neg_uk_10s)
+ks_stat_uk_10s = c()
+s_pval_uk_10s = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_uk_10s[i]
+  GPD_mod_uk_10s=gpd(log_neg_ret_uk_10s,u,method="ml")
+  GPD_shape_uk_10s[i]=GPD_mod_uk_10s$par.ests[1]
+  GPD_scale_uk_10s[i]=GPD_mod_uk_10s$par.ests[2]
+  error[i] = GPD_mod_uk_10s$par.ses[1]
+  GPD_sim_pos_uk_10s = evir::rgpd(10000,xi=GPD_shape_uk_10s[i],
+                           beta=GPD_scale_uk_10s[i])
+  ks_stat_uk_10s[i] =ks.test(unique(log_neg_ret_uk_10s),
+                             unique(GPD_sim_pos_uk_10s))$statistic
+  s_pval_uk_10s[i] =ks.test(unique(log_neg_ret_uk_10s),
+                             unique(GPD_sim_pos_uk_10s),exact=NULL)$p.value
+}
+
+me_neg_uk_10s = as.data.frame(matrix(c(GPD_shape_uk_10s,
+                 GPD_scale_uk_10s,error,ks_stat_uk_10s,s_pval_uk_10s),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_uk_10s)=c(paste0("u = ",as.character(xmin_pos_uk_10s)))
+colnames(me_neg_uk_10s)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_uk_10s
+
+u = xmin_neg_uk_10s[1]
+GPD_mod_uk_10s=gpd(log_neg_ret_uk_10s,u,method="ml")
+
+tailplot_i(GPD_mod_uk_10s,optlog = "xy",main="Left Tailplot GPD for 10s",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk10s$xmin
+x = seq(xmin,max(log_neg_ret_uk_10s), length.out=10000)
+data = log_neg_ret_uk_10s
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0016))
+lines(modPL_neg_ret_uk10s, type="l", col="green")
+
+tp(GPD_mod_uk_10s,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 10s")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk10s$xmin
+x = seq(xmin,max(log_neg_ret_uk_10s), length.out=10000)
+data = log_neg_ret_uk_10s
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 10s",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.225))
+lines(modPL_neg_ret_uk10s, type="l", col="green")
+
+tp(GPD_mod_uk_10s,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 10s")
+
+```
+
+### For 1m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_uk_1m)
+summary(log_neg_ret_uk_1m)
+
+# QQ-plot
+
+qqnorm(log_ret_uk_1m,main="Normal Q-Q Plot for 1m for FTSE 100")
+qqline(log_ret_uk_1m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_uk_1m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_uk_1m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_uk_1m,log="xy",
+         main="Right Tail Plot of Log-returns for 1m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_uk_1m,log="xy",
+         main="Left Tail Plot of Log-returns for 1m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_uk_1m)
+evir::meplot(log_neg_ret_uk_1m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_uk_1m)
+evir::hill(log_neg_ret_uk_1m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_uk_1m=seq(0.0005,0.001,0.00005)
+
+modPL_pos_ret_uk1m=conpl$new(log_pos_ret_uk_1m)
+est=estimate_xmin(modPL_pos_ret_uk1m,xmin_pos_uk_1m)
+modPL_pos_ret_uk1m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_uk_1m[log_pos_ret_uk_1m>=est$xmin]))
+sigma
+
+final_modPL_pos_uk_1m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_uk_1m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_uk_1m
+
+lnormal=conlnorm$new(log_pos_ret_uk_1m)
+estnorm=estimate_xmin(lnormal,xmin_pos_uk_1m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_uk1m,main="Right Tailplot PL for 1m",
+       xlab="Positive Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_pos_ret_uk1m, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_uk_1m=seq(0.0005,0.001,0.00005)
+
+modPL_neg_ret_uk1m=conpl$new(log_neg_ret_uk_1m)
+est=estimate_xmin(modPL_neg_ret_uk1m,xmin_neg_uk_1m)
+modPL_neg_ret_uk1m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_uk_1m[log_neg_ret_uk_1m>=est$xmin]))
+sigma
+
+final_modPL_neg_uk_1m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_uk_1m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_uk_1m
+
+lnormal=conlnorm$new(log_neg_ret_uk_1m)
+estnorm=estimate_xmin(lnormal,xmin_neg_uk_1m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_uk1m,main="Left Tailplot PL for 1m",
+       xlab="Negative Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_neg_ret_uk1m, col="green",lwd=1)
+
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_uk_1m = c()
+GPD_scale_uk_1m = c()
+error = c()
+l = length(xmin_pos_uk_1m)
+ks_stat_uk_1m = c()
+s_pval_uk_1m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_uk_1m[i]
+  GPD_mod_uk_1m=gpd(log_pos_ret_uk_1m,u,method="ml")
+  GPD_shape_uk_1m[i]=GPD_mod_uk_1m$par.ests[1]
+  GPD_scale_uk_1m[i]=GPD_mod_uk_1m$par.ests[2]
+  error[i] = GPD_mod_uk_1m$par.ses[1]
+  GPD_sim_pos_uk_1m = evir::rgpd(10000,xi=GPD_shape_uk_1m[i],
+                           beta=GPD_scale_uk_1m[i])
+  ks_stat_uk_1m[i] =ks.test(unique(log_pos_ret_uk_1m),
+                             unique(GPD_sim_pos_uk_1m))$statistic
+  s_pval_uk_1m[i] =ks.test(unique(log_pos_ret_uk_1m),
+                             unique(GPD_sim_pos_uk_1m),exact=NULL)$p.value
+}
+
+me_pos_uk_1m = as.data.frame(matrix(c(GPD_shape_uk_1m,
+                 GPD_scale_uk_1m,error,ks_stat_uk_1m,s_pval_uk_1m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_uk_1m)=c(paste0("u = ",as.character(xmin_pos_uk_1m)))
+colnames(me_pos_uk_1m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_uk_1m
+
+u = xmin_pos_uk_1m[1]
+GPD_mod_uk_1m=gpd(log_pos_ret_uk_1m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_1m,optlog = "xy",main="Right Tailplot GPD for 1m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk1m$xmin
+x = seq(xmin,max(log_pos_ret_uk_1m), length.out=10000)
+data = log_pos_ret_uk_1m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.036))
+lines(modPL_pos_ret_uk1m, type="l", col="green")
+tp(GPD_mod_uk_1m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk1m$xmin
+x = seq(xmin,max(log_pos_ret_uk_1m), length.out=10000)
+data = log_pos_ret_uk_1m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.02))
+lines(modPL_pos_ret_uk1m, type="l", col="green")
+tp(GPD_mod_uk_1m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_uk_1m = c()
+GPD_scale_uk_1m = c()
+error = c()
+l = length(xmin_neg_uk_1m)
+ks_stat_uk_1m = c()
+s_pval_uk_1m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_uk_1m[i]
+  GPD_mod_uk_1m=gpd(log_neg_ret_uk_1m,u,method="ml")
+  GPD_shape_uk_1m[i]=GPD_mod_uk_1m$par.ests[1]
+  GPD_scale_uk_1m[i]=GPD_mod_uk_1m$par.ests[2]
+  error[i] = GPD_mod_uk_1m$par.ses[1]
+  GPD_sim_pos_uk_1m = evir::rgpd(10000,xi=GPD_shape_uk_1m[i],
+                           beta=GPD_scale_uk_1m[i])
+  ks_stat_uk_1m[i] =ks.test(unique(log_neg_ret_uk_1m),
+                             unique(GPD_sim_pos_uk_1m))$statistic
+  s_pval_uk_1m[i] =ks.test(unique(log_neg_ret_uk_1m),
+                             unique(GPD_sim_pos_uk_1m),exact=NULL)$p.value
+}
+
+me_neg_uk_1m = as.data.frame(matrix(c(GPD_shape_uk_1m,
+                 GPD_scale_uk_1m,error,ks_stat_uk_1m,s_pval_uk_1m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_uk_1m)=c(paste0("u = ",as.character(xmin_pos_uk_1m)))
+colnames(me_neg_uk_1m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_uk_1m
+
+u = xmin_neg_uk_1m[1]
+GPD_mod_uk_1m=gpd(log_neg_ret_uk_1m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_1m,optlog = "xy",main="Left Tailplot GPD for 1m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk1m$xmin
+x = seq(xmin,max(log_neg_ret_uk_1m), length.out=10000)
+data = log_neg_ret_uk_1m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.02))
+lines(modPL_neg_ret_uk1m, type="l", col="green")
+
+tp(GPD_mod_uk_1m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk1m$xmin
+x = seq(xmin,max(log_neg_ret_uk_1m), length.out=10000)
+data = log_neg_ret_uk_1m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.036))
+lines(modPL_neg_ret_uk1m, type="l", col="green")
+
+tp(GPD_mod_uk_1m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1m")
+
+```
+
+### For 5m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_uk_5m)
+summary(log_neg_ret_uk_5m)
+
+# QQ-plot
+
+qqnorm(log_ret_uk_5m,main="Normal Q-Q Plot for 5m for FTSE 100")
+qqline(log_ret_uk_5m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_uk_5m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_uk_5m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_uk_5m,log="xy",
+         main="Right Tail Plot of Log-returns for 5m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_uk_5m,log="xy",
+         main="Left Tail Plot of Log-returns for 5m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_uk_5m)
+evir::meplot(log_neg_ret_uk_5m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_uk_5m)
+evir::hill(log_neg_ret_uk_5m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_uk_5m=seq(0.0005,0.002,0.00005)
+
+modPL_pos_ret_uk5m=conpl$new(log_pos_ret_uk_5m)
+est=estimate_xmin(modPL_pos_ret_uk5m,xmin_pos_uk_5m)
+modPL_pos_ret_uk5m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_uk_5m[log_pos_ret_uk_5m>=est$xmin]))
+sigma
+
+final_modPL_pos_uk_5m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_uk_5m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_uk_5m
+
+lnormal=conlnorm$new(log_pos_ret_uk_5m)
+estnorm=estimate_xmin(lnormal,xmin_pos_uk_5m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_uk5m,main="Right Tailplot PL for 5m",
+       xlab="Positive Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_pos_ret_uk5m, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_uk_5m=seq(0.0005,0.002,0.00005)
+
+modPL_neg_ret_uk5m=conpl$new(log_neg_ret_uk_5m)
+est=estimate_xmin(modPL_neg_ret_uk5m,xmin_neg_uk_5m)
+modPL_neg_ret_uk5m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_uk_5m[log_neg_ret_uk_5m>=est$xmin]))
+sigma
+
+final_modPL_neg_uk_5m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_uk_5m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_uk_5m
+
+lnormal=conlnorm$new(log_neg_ret_uk_5m)
+estnorm=estimate_xmin(lnormal,xmin_neg_uk_5m)
+lnormal$setXmin(estnorm)
+
+
+plot(modPL_neg_ret_uk5m,main="Left Tailplot PL for 5m",
+       xlab="Negative Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_neg_ret_uk5m, col="green",lwd=1)
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_uk_5m = c()
+GPD_scale_uk_5m = c()
+error = c()
+l = length(xmin_pos_uk_5m)
+ks_stat_uk_5m = c()
+s_pval_uk_5m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_uk_5m[i]
+  GPD_mod_uk_5m=gpd(log_pos_ret_uk_5m,u,method="ml")
+  GPD_shape_uk_5m[i]=GPD_mod_uk_5m$par.ests[1]
+  GPD_scale_uk_5m[i]=GPD_mod_uk_5m$par.ests[2]
+  error[i] = GPD_mod_uk_5m$par.ses[1]
+  GPD_sim_pos_uk_5m = evir::rgpd(10000,xi=GPD_shape_uk_5m[i],
+                           beta=GPD_scale_uk_5m[i])
+  ks_stat_uk_5m[i] =ks.test(unique(log_pos_ret_uk_5m),
+                             unique(GPD_sim_pos_uk_5m))$statistic
+  s_pval_uk_5m[i] =ks.test(unique(log_pos_ret_uk_5m),
+                             unique(GPD_sim_pos_uk_5m),exact=NULL)$p.value
+}
+
+me_pos_uk_5m = as.data.frame(matrix(c(GPD_shape_uk_5m,
+                 GPD_scale_uk_5m,error,ks_stat_uk_5m,s_pval_uk_5m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_uk_5m)=c(paste0("u = ",as.character(xmin_pos_uk_5m)))
+colnames(me_pos_uk_5m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_uk_5m
+
+u = xmin_pos_uk_5m[1]
+GPD_mod_uk_5m=gpd(log_pos_ret_uk_5m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_5m,optlog = "xy",main="Right Tailplot GPD for 5m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk5m$xmin
+x = seq(xmin,max(log_pos_ret_uk_5m), length.out=10000)
+data = log_pos_ret_uk_5m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.2))
+lines(modPL_pos_ret_uk5m, type="l", col="green")
+tp(GPD_mod_uk_5m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 5m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk5m$xmin
+x = seq(xmin,max(log_pos_ret_uk_5m), length.out=10000)
+data = log_pos_ret_uk_5m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.055))
+lines(modPL_pos_ret_uk5m, type="l", col="green")
+tp(GPD_mod_uk_5m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 5m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_uk_5m = c()
+GPD_scale_uk_5m = c()
+error = c()
+l = length(xmin_neg_uk_5m)
+ks_stat_uk_5m = c()
+s_pval_uk_5m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_uk_5m[i]
+  GPD_mod_uk_5m=gpd(log_neg_ret_uk_5m,u,method="ml")
+  GPD_shape_uk_5m[i]=GPD_mod_uk_5m$par.ests[1]
+  GPD_scale_uk_5m[i]=GPD_mod_uk_5m$par.ests[2]
+  error[i] = GPD_mod_uk_5m$par.ses[1]
+  GPD_sim_pos_uk_5m = evir::rgpd(10000,xi=GPD_shape_uk_5m[i],
+                           beta=GPD_scale_uk_5m[i])
+  ks_stat_uk_5m[i] =ks.test(unique(log_neg_ret_uk_5m),
+                             unique(GPD_sim_pos_uk_5m))$statistic
+  s_pval_uk_5m[i] =ks.test(unique(log_neg_ret_uk_5m),
+                             unique(GPD_sim_pos_uk_5m),exact=NULL)$p.value
+}
+
+me_neg_uk_5m = as.data.frame(matrix(c(GPD_shape_uk_5m,
+                 GPD_scale_uk_5m,error,ks_stat_uk_5m,s_pval_uk_5m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_uk_5m)=c(paste0("u = ",as.character(xmin_pos_uk_5m)))
+colnames(me_neg_uk_5m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_uk_5m
+
+u = xmin_neg_uk_5m[15]
+GPD_mod_uk_5m=gpd(log_neg_ret_uk_5m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_5m,optlog = "xy",main="Left Tailplot GPD for 5m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk5m$xmin
+x = seq(xmin,max(log_neg_ret_uk_5m), length.out=10000)
+data = log_neg_ret_uk_5m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.022))
+lines(modPL_neg_ret_uk5m, type="l", col="green")
+
+tp(GPD_mod_uk_5m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 5m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk5m$xmin
+x = seq(xmin,max(log_neg_ret_uk_5m), length.out=10000)
+data = log_neg_ret_uk_5m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 5m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.0275))
+lines(modPL_neg_ret_uk5m, type="l", col="green")
+
+tp(GPD_mod_uk_5m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 5m")
+
+```
+
+### For 15m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_uk_15m)
+summary(log_neg_ret_uk_15m)
+
+# QQ-plot
+
+qqnorm(log_ret_uk_15m,main="Normal Q-Q Plot for 15m for FTSE 100")
+qqline(log_ret_uk_15m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_uk_15m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_uk_15m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_uk_15m,log="xy",
+         main="Right Tail Plot of Log-returns for 15m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_uk_15m,log="xy",
+         main="Left Tail Plot of Log-returns for 15m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_uk_15m)
+evir::meplot(log_neg_ret_uk_15m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_uk_15m,xlim=c(0,5000))
+evir::hill(log_neg_ret_uk_15m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_uk_15m=seq(0.0005,0.0025,0.00005)
+
+modPL_pos_ret_uk15m=conpl$new(log_pos_ret_uk_15m)
+est=estimate_xmin(modPL_pos_ret_uk15m,xmin_pos_uk_15m)
+modPL_pos_ret_uk15m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_uk_15m[log_pos_ret_uk_15m>=est$xmin]))
+sigma
+
+final_modPL_pos_uk_15m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_uk_15m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_uk_15m
+
+lnormal=conlnorm$new(log_pos_ret_uk_15m)
+estnorm=estimate_xmin(lnormal,xmin_pos_uk_15m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_uk15m,main="Right Tailplot PL for 15m",
+       xlab="Positive Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_pos_ret_uk15m, col="green",lwd=1)
+
+# Negative
+
+xmin_neg_uk_15m=seq(0.0005,0.0025,0.00005)
+
+modPL_neg_ret_uk15m=conpl$new(log_neg_ret_uk_15m)
+est=estimate_xmin(modPL_neg_ret_uk15m,xmin_neg_uk_15m)
+modPL_neg_ret_uk15m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_uk_15m[log_neg_ret_uk_15m>=est$xmin]))
+sigma
+
+final_modPL_neg_uk_15m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_uk_15m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_uk_15m
+
+lnormal=conlnorm$new(log_neg_ret_uk_15m)
+estnorm=estimate_xmin(lnormal,xmin_neg_uk_15m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_uk15m,main="Left Tailplot PL for 15m",
+       xlab="Negative Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_neg_ret_uk15m, col="green",lwd=1)
+
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_uk_15m = c()
+GPD_scale_uk_15m = c()
+error = c()
+l = length(xmin_pos_uk_15m)
+ks_stat_uk_15m = c()
+s_pval_uk_15m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_uk_15m[i]
+  GPD_mod_uk_15m=gpd(log_pos_ret_uk_15m,u,method="ml")
+  GPD_shape_uk_15m[i]=GPD_mod_uk_15m$par.ests[1]
+  GPD_scale_uk_15m[i]=GPD_mod_uk_15m$par.ests[2]
+  error[i] = GPD_mod_uk_15m$par.ses[1]
+  GPD_sim_pos_uk_15m = evir::rgpd(10000,xi=GPD_shape_uk_15m[i],
+                           beta=GPD_scale_uk_15m[i])
+  ks_stat_uk_15m[i] =ks.test(unique(log_pos_ret_uk_15m),
+                             unique(GPD_sim_pos_uk_15m))$statistic
+  s_pval_uk_15m[i] =ks.test(unique(log_pos_ret_uk_15m),
+                             unique(GPD_sim_pos_uk_15m),exact=NULL)$p.value
+}
+
+me_pos_uk_15m = as.data.frame(matrix(c(GPD_shape_uk_15m,
+                 GPD_scale_uk_15m,error,ks_stat_uk_15m,s_pval_uk_15m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_uk_15m)=c(paste0("u = ",as.character(xmin_pos_uk_15m)))
+colnames(me_pos_uk_15m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_uk_15m
+
+u = xmin_pos_uk_15m[1]
+GPD_mod_uk_15m=gpd(log_pos_ret_uk_15m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_15m,optlog = "xy",main="Right Tailplot GPD for 15m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk15m$xmin
+x = seq(xmin,max(log_pos_ret_uk_15m), length.out=10000)
+data = log_pos_ret_uk_15m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.04))
+lines(modPL_pos_ret_uk15m, type="l", col="green")
+tp(GPD_mod_uk_15m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 15m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk15m$xmin
+x = seq(xmin,max(log_pos_ret_uk_15m), length.out=10000)
+data = log_pos_ret_uk_15m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.4))
+lines(modPL_pos_ret_uk15m, type="l", col="green")
+tp(GPD_mod_uk_15m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 15m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_uk_15m = c()
+GPD_scale_uk_15m = c()
+error = c()
+l = length(xmin_neg_uk_15m)
+ks_stat_uk_15m = c()
+s_pval_uk_15m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_uk_15m[i]
+  GPD_mod_uk_15m=gpd(log_neg_ret_uk_15m,u,method="ml")
+  GPD_shape_uk_15m[i]=GPD_mod_uk_15m$par.ests[1]
+  GPD_scale_uk_15m[i]=GPD_mod_uk_15m$par.ests[2]
+  error[i] = GPD_mod_uk_15m$par.ses[1]
+  GPD_sim_pos_uk_15m = evir::rgpd(10000,xi=GPD_shape_uk_15m[i],
+                           beta=GPD_scale_uk_15m[i])
+  ks_stat_uk_15m[i] =ks.test(unique(log_neg_ret_uk_15m),
+                             unique(GPD_sim_pos_uk_15m))$statistic
+  s_pval_uk_15m[i] =ks.test(unique(log_neg_ret_uk_15m),
+                             unique(GPD_sim_pos_uk_15m),exact=NULL)$p.value
+}
+
+me_neg_uk_15m = as.data.frame(matrix(c(GPD_shape_uk_15m,
+                 GPD_scale_uk_15m,error,ks_stat_uk_15m,s_pval_uk_15m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_uk_15m)=c(paste0("u = ",as.character(xmin_pos_uk_15m)))
+colnames(me_neg_uk_15m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_uk_15m
+
+u = xmin_neg_uk_15m[1]
+GPD_mod_uk_15m=gpd(log_neg_ret_uk_15m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_15m,optlog = "xy",main="Left Tailplot GPD for 15m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk15m$xmin
+x = seq(xmin,max(log_neg_ret_uk_15m), length.out=10000)
+data = log_neg_ret_uk_15m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.4))
+lines(modPL_neg_ret_uk15m, type="l", col="green")
+
+tp(GPD_mod_uk_15m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 15m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk15m$xmin
+x = seq(xmin,max(log_neg_ret_uk_15m), length.out=10000)
+data = log_neg_ret_uk_15m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 15m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.11))
+lines(modPL_neg_ret_uk15m, type="l", col="green")
+
+tp(GPD_mod_uk_15m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 15m")
+
+```
+
+### For 30m
+
+```{r}
+######################## Exploratory Data Analysis #########################
+
+# descriptive statistics
+
+summary(log_pos_ret_uk_30m)
+summary(log_neg_ret_uk_30m)
+
+# QQ-plot
+
+qqnorm(log_ret_uk_30m,main="Normal Q-Q Plot for 30m for FTSE 100")
+qqline(log_ret_uk_30m)
+abline(0,1)
+
+# histograms & plots
+
+hist(log_pos_ret_uk_30m,xlim=c(0,0.001),breaks=50,
+     main="Positive Log-Returns Histogram")
+
+hist(log_neg_ret_uk_30m,xlim=c(0,0.001),breaks=100,
+     main="Negative Log-Returns Histogram")
+
+# positive tail log-log plot
+
+tailPlot(log_pos_ret_uk_30m,log="xy",
+         main="Right Tail Plot of Log-returns for 30m")
+
+# negative tail log-log plot
+
+tailPlot(log_neg_ret_uk_30m,log="xy",
+         main="Left Tail Plot of Log-returns for 30m")
+```
+
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_uk_30m)
+evir::meplot(log_neg_ret_uk_30m)
+
+# Hill plot
+
+evir::hill(log_pos_ret_uk_30m)
+evir::hill(log_neg_ret_uk_30m)
+```
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_uk_30m=seq(0.0005,0.003,0.00005)
+
+modPL_pos_ret_uk30m=conpl$new(log_pos_ret_uk_30m)
+est=estimate_xmin(modPL_pos_ret_uk30m,xmin_pos_uk_30m)
+modPL_pos_ret_uk30m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_uk_30m[log_pos_ret_uk_30m>=est$xmin]))
+sigma
+
+final_modPL_pos_uk_30m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_uk_30m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_uk_30m
+
+lnormal=conlnorm$new(log_pos_ret_uk_30m)
+estnorm=estimate_xmin(lnormal,xmin_pos_uk_30m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_uk30m,main="Right Tailplot PL for 30m",
+       xlab="Positive Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_pos_ret_uk30m, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_uk_30m=seq(0.0005,0.003,0.00005)
+
+modPL_neg_ret_uk30m=conpl$new(log_neg_ret_uk_30m)
+est=estimate_xmin(modPL_neg_ret_uk30m,xmin_neg_uk_30m)
+modPL_neg_ret_uk30m$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_uk_30m[log_neg_ret_uk_30m>=est$xmin]))
+sigma
+
+final_modPL_neg_uk_30m = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_uk_30m) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_uk_30m
+
+lnormal=conlnorm$new(log_neg_ret_uk_30m)
+estnorm=estimate_xmin(lnormal,xmin_neg_uk_30m)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_uk30m,main="Left Tailplot PL for 30m",
+       xlab="Negative Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_neg_ret_uk30m, col="green",lwd=1)
+
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_uk_30m = c()
+GPD_scale_uk_30m = c()
+error = c()
+l = length(xmin_pos_uk_30m)
+ks_stat_uk_30m = c()
+s_pval_uk_30m = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_uk_30m[i]
+  GPD_mod_uk_30m=gpd(log_pos_ret_uk_30m,u,method="ml")
+  GPD_shape_uk_30m[i]=GPD_mod_uk_30m$par.ests[1]
+  GPD_scale_uk_30m[i]=GPD_mod_uk_30m$par.ests[2]
+  error[i] = GPD_mod_uk_30m$par.ses[1]
+  GPD_sim_pos_uk_30m = evir::rgpd(10000,xi=GPD_shape_uk_30m[i],
+                           beta=GPD_scale_uk_30m[i])
+  ks_stat_uk_30m[i] =ks.test(unique(log_pos_ret_uk_30m),
+                             unique(GPD_sim_pos_uk_30m))$statistic
+  s_pval_uk_30m[i] =ks.test(unique(log_pos_ret_uk_30m),
+                             unique(GPD_sim_pos_uk_30m),exact=NULL)$p.value
+}
+
+me_pos_uk_30m = as.data.frame(matrix(c(GPD_shape_uk_30m,
+                 GPD_scale_uk_30m,error,ks_stat_uk_30m,s_pval_uk_30m),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_uk_30m)=c(paste0("u = ",as.character(xmin_pos_uk_30m)))
+colnames(me_pos_uk_30m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_uk_30m
+
+u = xmin_pos_uk_30m[3]
+GPD_mod_uk_30m=gpd(log_pos_ret_uk_30m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_30m,optlog = "xy",main="Right Tailplot GPD for 30m",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk30m$xmin
+x = seq(xmin,max(log_pos_ret_uk_30m), length.out=10000)
+data = log_pos_ret_uk_30m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.038))
+lines(modPL_pos_ret_uk30m, type="l", col="green")
+tp(GPD_mod_uk_30m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 30m")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk30m$xmin
+x = seq(xmin,max(log_pos_ret_uk_30m), length.out=10000)
+data = log_pos_ret_uk_30m
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.45))
+lines(modPL_pos_ret_uk30m, type="l", col="green")
+tp(GPD_mod_uk_30m,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 30m")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_uk_30m = c()
+GPD_scale_uk_30m = c()
+error = c()
+l = length(xmin_neg_uk_30m)
+ks_stat_uk_30m = c()
+s_pval_uk_30m = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_uk_30m[i]
+  GPD_mod_uk_30m=gpd(log_neg_ret_uk_30m,u,method="ml")
+  GPD_shape_uk_30m[i]=GPD_mod_uk_30m$par.ests[1]
+  GPD_scale_uk_30m[i]=GPD_mod_uk_30m$par.ests[2]
+  error[i] = GPD_mod_uk_30m$par.ses[1]
+  GPD_sim_pos_uk_30m = evir::rgpd(10000,xi=GPD_shape_uk_30m[i],
+                           beta=GPD_scale_uk_30m[i])
+  ks_stat_uk_30m[i] =ks.test(unique(log_neg_ret_uk_30m),
+                             unique(GPD_sim_pos_uk_30m))$statistic
+  s_pval_uk_30m[i] =ks.test(unique(log_neg_ret_uk_30m),
+                             unique(GPD_sim_pos_uk_30m),exact=NULL)$p.value
+}
+
+me_neg_uk_30m = as.data.frame(matrix(c(GPD_shape_uk_30m,
+                 GPD_scale_uk_30m,error,ks_stat_uk_30m,s_pval_uk_30m),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_uk_30m)=c(paste0("u = ",as.character(xmin_pos_uk_30m)))
+colnames(me_neg_uk_30m)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_uk_30m
+
+u = xmin_neg_uk_30m[3]
+GPD_mod_uk_30m=gpd(log_neg_ret_uk_30m,u,method="ml")
+
+tailplot_i(GPD_mod_uk_30m,optlog = "xy",main="Left Tailplot GPD for 30m",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk30m$xmin
+x = seq(xmin,max(log_neg_ret_uk_30m), length.out=10000)
+data = log_neg_ret_uk_30m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.425))
+lines(modPL_neg_ret_uk30m, type="l", col="green")
+
+tp(GPD_mod_uk_30m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 30m")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk30m$xmin
+x = seq(xmin,max(log_neg_ret_uk_30m), length.out=10000)
+data = log_neg_ret_uk_30m
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 30m",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.325))
+lines(modPL_neg_ret_uk30m, type="l", col="green")
+
+tp(GPD_mod_uk_30m,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 30m")
+```
+```{r}
+################################ Plots for U ################################
+
+# mean excess
+
+evir::meplot(log_pos_ret_uk_1h)
+evir::meplot(log_neg_ret_uk_1h)
+
+# Hill plot
+
+evir::hill(log_pos_ret_uk_1h,xlim=c(0,5000))
+evir::hill(log_neg_ret_uk_1h)
+```
+
+
+```{r}
+############################### PL Fitting ################################
+
+##### ME plot method
+
+# Positive
+
+xmin_pos_uk_1h=seq(0.0005,0.003,0.00005)
+
+modPL_pos_ret_uk1h=conpl$new(log_pos_ret_uk_1h)
+est=estimate_xmin(modPL_pos_ret_uk1h,xmin_pos_uk_1h)
+modPL_pos_ret_uk1h$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_pos_ret_uk_1h[log_pos_ret_uk_1h>=est$xmin]))
+sigma
+
+final_modPL_pos_uk_1h = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_pos_uk_1h) = c("xmin","alpha","K-S Test Distance")
+final_modPL_pos_uk_1h
+
+lnormal=conlnorm$new(log_pos_ret_uk_1h)
+estnorm=estimate_xmin(lnormal,xmin_pos_uk_1h)
+lnormal$setXmin(estnorm)
+
+plot(modPL_pos_ret_uk1h,main="Right Tailplot PL for 1h",
+       xlab="Positive Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_pos_ret_uk1h, col="green",lwd=1)
+
+
+# Negative
+
+xmin_neg_uk_1h=seq(0.0005,0.003,0.00005)
+
+modPL_neg_ret_uk1h=conpl$new(log_neg_ret_uk_1h)
+est=estimate_xmin(modPL_neg_ret_uk1h,xmin_neg_uk_1h)
+modPL_neg_ret_uk1h$setXmin(est)
+
+sigma = (est$pars-1)/sqrt(length(log_neg_ret_uk_1h[log_neg_ret_uk_1h>=est$xmin]))
+sigma
+
+final_modPL_neg_uk_1h = as.data.frame(t(c(est$xmin,est$pars,est$gof)))
+colnames(final_modPL_neg_uk_1h) = c("xmin","alpha","K-S Test Distance")
+final_modPL_neg_uk_1h
+
+lnormal=conlnorm$new(log_neg_ret_uk_1h)
+estnorm=estimate_xmin(lnormal,xmin_neg_uk_1h)
+lnormal$setXmin(estnorm)
+
+plot(modPL_neg_ret_uk1h,main="Left Tailplot PL for 1h",
+       xlab="Negative Log-returns FTSE 100",ylab="1-F(x) (on log scale)",xlim=c(5e-04,1e-02))
+lines(modPL_neg_ret_uk1h, col="green",lwd=1)
+
+##### Hill Method
+
+```
+
+```{r}
+################################ EVT Fitting ################################
+
+######### ME plot method
+
+# Positive
+
+set.seed(1432)
+
+GPD_shape_uk_1h = c()
+GPD_scale_uk_1h = c()
+error = c()
+l = length(xmin_pos_uk_1h)
+ks_stat_uk_1h = c()
+s_pval_uk_1h = c()
+
+for (i in 1:l){
+
+  u = xmin_pos_uk_1h[i]
+  GPD_mod_uk_1h=gpd(log_pos_ret_uk_1h,u,method="ml")
+  GPD_shape_uk_1h[i]=GPD_mod_uk_1h$par.ests[1]
+  GPD_scale_uk_1h[i]=GPD_mod_uk_1h$par.ests[2]
+  error[i] = GPD_mod_uk_1h$par.ses[1]
+  GPD_sim_pos_uk_1h = evir::rgpd(10000,xi=GPD_shape_uk_1h[i],
+                           beta=GPD_scale_uk_1h[i])
+  ks_stat_uk_1h[i] =ks.test(unique(log_pos_ret_uk_1h),
+                             unique(GPD_sim_pos_uk_1h))$statistic
+  s_pval_uk_1h[i] =ks.test(unique(log_pos_ret_uk_1h),
+                             unique(GPD_sim_pos_uk_1h),exact=NULL)$p.value
+}
+
+me_pos_uk_1h = as.data.frame(matrix(c(GPD_shape_uk_1h,
+                 GPD_scale_uk_1h,error,ks_stat_uk_1h,s_pval_uk_1h),ncol=5,
+                 nrow = l))
+
+rownames(me_pos_uk_1h)=c(paste0("u = ",as.character(xmin_pos_uk_1h)))
+colnames(me_pos_uk_1h)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_pos_uk_1h
+
+u = xmin_pos_uk_1h[14]
+GPD_mod_uk_1h=gpd(log_pos_ret_uk_1h,u,method="ml")
+
+tailplot_i(GPD_mod_uk_1h,optlog = "xy",main="Right Tailplot GPD for 1h",xlab="Positive Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk1h$xmin
+x = seq(xmin,max(log_pos_ret_uk_1h), length.out=10000)
+data = log_pos_ret_uk_1h
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.22))
+lines(modPL_pos_ret_uk1h, type="l", col="green")
+tp(GPD_mod_uk_1h,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1h")
+
+par(mfrow=c(1,2))
+xmin = modPL_pos_ret_uk1h$xmin
+x = seq(xmin,max(log_pos_ret_uk_1h), length.out=10000)
+data = log_pos_ret_uk_1h
+
+emplot_i(data,xlab = "Positive Log-returns Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.35))
+lines(modPL_pos_ret_uk1h, type="l", col="green")
+tp(GPD_mod_uk_1h,optlog = "", xlab="Positive Log-returns Nikkei 225", main = "GPD Fit for 1h")
+
+dev.off() 
+
+# Negative
+
+set.seed(1432)
+
+GPD_shape_uk_1h = c()
+GPD_scale_uk_1h = c()
+error = c()
+l = length(xmin_neg_uk_1h)
+ks_stat_uk_1h = c()
+s_pval_uk_1h = c()
+
+for (i in 1:l){
+
+  u = xmin_neg_uk_1h[i]
+  GPD_mod_uk_1h=gpd(log_neg_ret_uk_1h,u,method="ml")
+  GPD_shape_uk_1h[i]=GPD_mod_uk_1h$par.ests[1]
+  GPD_scale_uk_1h[i]=GPD_mod_uk_1h$par.ests[2]
+  error[i] = GPD_mod_uk_1h$par.ses[1]
+  GPD_sim_pos_uk_1h = evir::rgpd(10000,xi=GPD_shape_uk_1h[i],
+                           beta=GPD_scale_uk_1h[i])
+  ks_stat_uk_1h[i] =ks.test(unique(log_neg_ret_uk_1h),
+                             unique(GPD_sim_pos_uk_1h))$statistic
+  s_pval_uk_1h[i] =ks.test(unique(log_neg_ret_uk_1h),
+                             unique(GPD_sim_pos_uk_1h),exact=NULL)$p.value
+}
+
+me_neg_uk_1h = as.data.frame(matrix(c(GPD_shape_uk_1h,
+                 GPD_scale_uk_1h,error,ks_stat_uk_1h,s_pval_uk_1h),ncol=5,
+                 nrow = l))
+
+rownames(me_neg_uk_1h)=c(paste0("u = ",as.character(xmin_pos_uk_1h)))
+colnames(me_neg_uk_1h)=c("Shape","Scale","error","K-S Test","P-value")
+
+me_neg_uk_1h
+
+u = xmin_neg_uk_1h[2]
+GPD_mod_uk_1h=gpd(log_neg_ret_uk_1h,u,method="ml")
+
+tailplot_i(GPD_mod_uk_1h,optlog = "xy",main="Left Tailplot GPD for 1h",xlab="Negative Log-returns for Nikkei 225 (on log scale)")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk1h$xmin
+x = seq(xmin,max(log_neg_ret_uk_1h), length.out=10000)
+data = log_neg_ret_uk_1h
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.6))
+lines(modPL_neg_ret_uk1h, type="l", col="green")
+
+tp(GPD_mod_uk_1h,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1h")
+
+par(mfrow=c(1,2))
+xmin = modPL_neg_ret_uk1h$xmin
+x = seq(xmin,max(log_neg_ret_uk_1h), length.out=10000)
+data = log_neg_ret_uk_1h
+
+emplot_i(data,xlab = "Negative Log-returns for Nikkei 225",
+         ylab = "1-F(x)",main= "PL Fit for 1h",xlim=c(u,max(data[data>=xmin])*1.5),ylim=c(0,0.08))
+lines(modPL_neg_ret_uk1h, type="l", col="green")
+
+tp(GPD_mod_uk_1h,optlog = "", xlab="Negative Log-returns for Nikkei 225", main = "GPD Fit for 1h")
+
+```
+
+### VaR and ES Computation
+
+```{r}
+################################ PL Fitting ################################
+
+alpha_neg_uk=as.numeric(c(final_modPL_neg_uk_10s[2],final_modPL_neg_uk_1m[2],
+                       final_modPL_neg_uk_5m[2],final_modPL_neg_uk_15m[2],
+                       final_modPL_neg_uk_30m[2],final_modPL_neg_uk_1h[2]))
+
+xmin_neg_uk=as.numeric(c(final_modPL_neg_uk_10s[1],final_modPL_neg_uk_1m[1],
+                       final_modPL_neg_uk_5m[1],final_modPL_neg_uk_15m[1],
+                       final_modPL_neg_uk_30m[1],final_modPL_neg_uk_1h[1]))
+
+VaR_neg_uk_PL = vector()
+ES_neg_uk_PL = vector()
+
+set.seed(1234)
+
+for(i in 1:6){
+  x = rplcon(10000, xmin_neg_uk[i], alpha_neg_uk[i])
+  x1 = sort(x)
+  VaR_neg_uk_PL[i] = x1[9900]
+  ES_neg_uk_PL[i] = mean(x[x>VaR_neg_uk_PL[i]])
+}
+
+VaR_neg_uk_PL;ES_neg_uk_PL
+
+############################### EVT Fitting ################################
+
+xi_neg_uk=as.numeric(c(me_neg_uk_10s[1,1],me_neg_uk_1m[1,1],
+                       me_neg_uk_5m[15,1],me_neg_uk_15m[1,1],
+                       me_neg_uk_30m[3,1],me_neg_uk_1h[2,1]))
+
+beta_neg_uk=as.numeric(c(me_neg_uk_10s[1,2],me_neg_uk_1m[1,2],
+                       me_neg_uk_5m[15,2],me_neg_uk_15m[1,2],
+                       me_neg_uk_30m[3,2],me_neg_uk_1h[2,2]))
+
+u_neg_uk = as.numeric(c(5e-04,5e-04,5e-04,0.0029,0.00105,0.0037))
+
+VaR_neg_uk_GPD = vector()
+ES_neg_uk_GPD = vector()
+
+for(i in 1:6){
+  VaR_neg_uk_GPD[i] = qgpd(0.99,xi = xi_neg_uk[i],mu=0,beta = beta_neg_uk[i])
+  x = rgpd(10000,xi = xi_neg_uk[i],mu=0,beta = beta_neg_uk[i])
+  ES_neg_uk_GPD[i] = mean(x[x>VaR_neg_uk_GPD[i]])
+}
+
+VaR_neg_uk_GPD;ES_neg_uk_GPD
+```
+```{r}
+# Positive Ftse
+
+length(log_pos_ret_uk_10s[log_pos_ret_uk_10s>=1e-04])
+length(log_pos_ret_uk_1m[log_pos_ret_uk_1m>=5e-04])
+length(log_pos_ret_uk_5m[log_pos_ret_uk_5m>=5e-04])
+length(log_pos_ret_uk_15m[log_pos_ret_uk_15m>=5e-04])
+length(log_pos_ret_uk_30m[log_pos_ret_uk_30m>=6e-04])
+length(log_pos_ret_uk_1h[log_pos_ret_uk_1h>=1.15e-03])
+
+# Negative Ftse
+
+length(log_neg_ret_uk_10s[log_neg_ret_uk_10s>=1e-04])
+length(log_neg_ret_uk_1m[log_neg_ret_uk_1m>=5e-04])
+length(log_neg_ret_uk_5m[log_neg_ret_uk_5m>=1.2e-03])
+length(log_neg_ret_uk_15m[log_neg_ret_uk_15m>=5e-04])
+length(log_neg_ret_uk_30m[log_neg_ret_uk_30m>=6e-04])
+length(log_neg_ret_uk_1h[log_neg_ret_uk_1h>=5.5e-04])
+```
+
+```{r}
+########################### Comparative Graphs PLs #############################
+
+### 10s
+
+# Positive
+
+norm=fitdistr(log_ret_uk_10s,'normal')
+exp=fitdistr(log_pos_ret_uk_10s,'exponential')
+
+a=hist(log(log_pos_ret_uk_10s),breaks=50)
+b=hist(log_pos_ret_uk_10s,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_10s),breaks=50)
+d=hist(log_pos_ret_uk_10s,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_10s)/length(log_pos_ret_uk_10s)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_10s$alpha
+thr_1=final_modPL_pos_uk_10s$xmin
+log_pos_retail_1=log_pos_ret_uk_10s[log_pos_ret_uk_10s>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_10s)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model for 10s")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+# Negative
+
+norm=fitdistr(log_ret_uk_10s,'normal')
+exp=fitdistr(log_neg_ret_uk_10s,'exponential')
+
+a=hist(log(log_neg_ret_uk_10s),breaks=50)
+b=hist(log_neg_ret_uk_10s,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_10s),breaks=50)
+d=hist(log_neg_ret_uk_10s,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_10s)/length(log_neg_ret_uk_10s)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_10s$alpha
+thr_1=final_modPL_neg_uk_10s$xmin
+log_neg_retail_1=log_neg_ret_uk_10s[log_neg_ret_uk_10s>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_10s)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model for 10s")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 1m
+
+# Positive
+
+norm=fitdistr(log_ret_uk_1m,'normal')
+exp=fitdistr(log_pos_ret_uk_1m,'exponential')
+
+a=hist(log(log_pos_ret_uk_1m),breaks=50)
+b=hist(log_pos_ret_uk_1m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_1m),breaks=50)
+d=hist(log_pos_ret_uk_1m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_1m)/length(log_pos_ret_uk_1m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_1m$alpha
+thr_1=final_modPL_pos_uk_1m$xmin
+log_pos_retail_1=log_pos_ret_uk_1m[log_pos_ret_uk_1m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_1m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model for 1m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+# Negative
+
+norm=fitdistr(log_ret_uk_1m,'normal')
+exp=fitdistr(log_neg_ret_uk_1m,'exponential')
+
+a=hist(log(log_neg_ret_uk_1m),breaks=50)
+b=hist(log_neg_ret_uk_1m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_1m),breaks=50)
+d=hist(log_neg_ret_uk_1m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_1m)/length(log_neg_ret_uk_1m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_1m$alpha
+thr_1=final_modPL_neg_uk_1m$xmin
+log_neg_retail_1=log_neg_ret_uk_1m[log_neg_ret_uk_1m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_1m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model for 1m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 5m
+
+# Positive
+
+norm=fitdistr(log_ret_uk_5m,'normal')
+exp=fitdistr(log_pos_ret_uk_5m,'exponential')
+
+a=hist(log(log_pos_ret_uk_5m),breaks=50)
+b=hist(log_pos_ret_uk_5m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_5m),breaks=50)
+d=hist(log_pos_ret_uk_5m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_5m)/length(log_pos_ret_uk_5m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_5m$alpha
+thr_1=final_modPL_pos_uk_5m$xmin
+log_pos_retail_1=log_pos_ret_uk_5m[log_pos_ret_uk_5m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_5m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model for 5m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+# Negative
+
+norm=fitdistr(log_ret_uk_5m,'normal')
+exp=fitdistr(log_neg_ret_uk_5m,'exponential')
+
+a=hist(log(log_neg_ret_uk_5m),breaks=50)
+b=hist(log_neg_ret_uk_5m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_5m),breaks=50)
+d=hist(log_neg_ret_uk_5m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_5m)/length(log_neg_ret_uk_5m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_5m$alpha
+thr_1=final_modPL_neg_uk_5m$xmin
+log_neg_retail_1=log_neg_ret_uk_5m[log_neg_ret_uk_5m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_5m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model for 5m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 15m
+
+# Positive
+
+norm=fitdistr(log_ret_uk_15m,'normal')
+exp=fitdistr(log_pos_ret_uk_15m,'exponential')
+
+a=hist(log(log_pos_ret_uk_15m),breaks=50)
+b=hist(log_pos_ret_uk_15m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_15m),breaks=50)
+d=hist(log_pos_ret_uk_15m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_15m)/length(log_pos_ret_uk_15m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_15m$alpha
+thr_1=final_modPL_pos_uk_15m$xmin
+log_pos_retail_1=log_pos_ret_uk_15m[log_pos_ret_uk_15m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_15m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model for 15m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+# Negative
+
+norm=fitdistr(log_ret_uk_15m,'normal')
+exp=fitdistr(log_neg_ret_uk_15m,'exponential')
+
+a=hist(log(log_neg_ret_uk_15m),breaks=50)
+b=hist(log_neg_ret_uk_15m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_15m),breaks=50)
+d=hist(log_neg_ret_uk_15m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_15m)/length(log_neg_ret_uk_15m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_15m$alpha
+thr_1=final_modPL_neg_uk_15m$xmin
+log_neg_retail_1=log_neg_ret_uk_15m[log_neg_ret_uk_15m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_15m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model for 15m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 30m
+
+# Positive
+
+norm=fitdistr(log_ret_uk_30m,'normal')
+exp=fitdistr(log_pos_ret_uk_30m,'exponential')
+
+a=hist(log(log_pos_ret_uk_30m),breaks=50)
+b=hist(log_pos_ret_uk_30m,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_30m),breaks=50)
+d=hist(log_pos_ret_uk_30m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_30m)/length(log_pos_ret_uk_30m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_30m$alpha
+thr_1=final_modPL_pos_uk_30m$xmin
+log_pos_retail_1=log_pos_ret_uk_30m[log_pos_ret_uk_30m>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_30m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model for 30m")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+# Negative
+
+norm=fitdistr(log_ret_uk_30m,'normal')
+exp=fitdistr(log_neg_ret_uk_30m,'exponential')
+
+a=hist(log(log_neg_ret_uk_30m),breaks=50)
+b=hist(log_neg_ret_uk_30m,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_30m),breaks=50)
+d=hist(log_neg_ret_uk_30m,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_30m)/length(log_neg_ret_uk_30m)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_30m$alpha
+thr_1=final_modPL_neg_uk_30m$xmin
+log_neg_retail_1=log_neg_ret_uk_30m[log_neg_ret_uk_30m>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_30m)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model for 30m")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 1h
+
+# Positive
+
+norm=fitdistr(log_ret_uk_1h,'normal')
+exp=fitdistr(log_pos_ret_uk_1h,'exponential')
+
+a=hist(log(log_pos_ret_uk_1h),breaks=50)
+b=hist(log_pos_ret_uk_1h,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_1h),breaks=50)
+d=hist(log_pos_ret_uk_1h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_1h)/length(log_pos_ret_uk_1h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_1h$alpha
+thr_1=final_modPL_pos_uk_1h$xmin
+log_pos_retail_1=log_pos_ret_uk_1h[log_pos_ret_uk_1h>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_1h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model for 1h")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+# Negative
+
+norm=fitdistr(log_ret_uk_1h,'normal')
+exp=fitdistr(log_neg_ret_uk_1h,'exponential')
+
+a=hist(log(log_neg_ret_uk_1h),breaks=50)
+b=hist(log_neg_ret_uk_1h,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_1h),breaks=50)
+d=hist(log_neg_ret_uk_1h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_1h)/length(log_neg_ret_uk_1h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_1h$alpha
+thr_1=final_modPL_neg_uk_1h$xmin
+log_neg_retail_1=log_neg_ret_uk_1h[log_neg_ret_uk_1h>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_1h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model for 1h")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+### 4h
+
+# Positive
+
+norm=fitdistr(log_ret_uk_4h,'normal')
+exp=fitdistr(log_pos_ret_uk_4h,'exponential')
+
+a=hist(log(log_pos_ret_uk_4h),breaks=50)
+b=hist(log_pos_ret_uk_4h,breaks=exp(a$breaks))
+c=hist(log(log_pos_ret_uk_4h),breaks=50)
+d=hist(log_pos_ret_uk_4h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_4h)/length(log_pos_ret_uk_4h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_pos_uk_4h$alpha
+thr_1=final_modPL_pos_uk_4h$xmin
+log_pos_retail_1=log_pos_ret_uk_4h[log_pos_ret_uk_4h>=thr_1]
+constant_hist_1= length(log_pos_retail_1)/length(log_pos_ret_uk_4h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_pos_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Positive Log-returns for FTSE 100",main= "Right Tail PL Model")
+lines(sort(log_pos_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+
+
+# Negative
+
+norm=fitdistr(log_ret_uk_4h,'normal')
+exp=fitdistr(log_neg_ret_uk_4h,'exponential')
+
+a=hist(log(log_neg_ret_uk_4h),breaks=50)
+b=hist(log_neg_ret_uk_4h,breaks=exp(a$breaks))
+c=hist(log(log_neg_ret_uk_4h),breaks=50)
+d=hist(log_neg_ret_uk_4h,breaks = exp(c$breaks))
+
+db=c(-d$mids,b$mids)
+constant=length(log_ret_uk_4h)/length(log_neg_ret_uk_4h)
+modexp = exp$estimate*exp(-exp$estimate*b$mids)
+modnorm= constant*(1 / ( norm$estimate[2]*sqrt(2*pi)))*exp(-(db-norm$estimate[1])^2/(2*norm$estimate[2]^2))
+
+log_returns=b$mids
+Density=b$density
+
+alpha_1=final_modPL_neg_uk_4h$alpha
+thr_1=final_modPL_neg_uk_4h$xmin
+log_neg_retail_1=log_neg_ret_uk_4h[log_neg_ret_uk_4h>=thr_1]
+constant_hist_1= length(log_neg_retail_1)/length(log_neg_ret_uk_4h)
+model_pw_1 = constant_hist_1*(alpha_1)/thr_1*(sort(log_neg_retail_1)/thr_1)^(-(alpha_1)-1)
+
+
+plot(log_returns,Density,log="xy",xlim=c(5e-06,1e-02),xlab = "Negative Log-returns for FTSE 100",main= "Left Tail PL Model")
+lines(sort(log_neg_retail_1),model_pw_1, col = 'green')
+lines(db , modnorm, col='blue')
+legend("bottomleft", legend = c("Power Law","Normal"), 
+       col = c('green' , "blue"), lty = c(1,1,1), lwd = 2)
+```
+
+# 3rd Application: Fractality
+
+### Nikkei 225 Mean
+
+```{r}
+nik10s = mean(abs(log_ret_jap_10s))
+nik1m = mean(abs(log_ret_jap_1m))
+nik5m = mean(abs(log_ret_jap_5m))
+nik15m = mean(abs(log_ret_jap_15m))
+nik30m = mean(abs(log_ret_jap_30m))
+nik1h = mean(abs(log_ret_jap_1h))
+nik4h = mean(abs(log_ret_jap_4h))
+nik12h = mean(abs(log_ret_jap_12h))
+nik1d = mean(abs(log_ret_jap_1d))
+
+nik = log(c(nik10s,nik1m,nik5m,nik15m,nik30m,nik1h,nik4h,nik12h,nik1d))
+exp(nik)
+Density=c(log(10),log(60),log(60*5),log(60*15),log(60*30),log(60*60),
+          log(60*60*4),log(60*60*12),log(60*60*24))
+exp(Density)
+
+line=lm(as.data.frame(matrix(c(nik,Density),ncol=2)))
+summary(line)
+
+(coefs = c(exp(line$coefficients[1]),line$coefficients[2],1/line$coefficients[2]))
+
+plot(x=Density,y=nik,log="",ylab="log(Absolute Price Change)",
+     xlab="log(Interval in Seconds)",pch=19,main="Scaling Law for Nikkei 225")
+abline(line,col="black")
+
+
+
+```
+
+### FTSE 100 Mean
+
+```{r}
+ftse10s = mean(abs(log_ret_uk_10s))
+ftse1m = mean(abs(log_ret_uk_1m))
+ftse5m = mean(abs(log_ret_uk_5m))
+ftse15m = mean(abs(log_ret_uk_15m))
+ftse30m = mean(abs(log_ret_uk_30m))
+ftse1h = mean(abs(log_ret_uk_1h))
+ftse4h = mean(abs(log_ret_uk_4h))
+ftse12h = mean(abs(log_ret_uk_12h))
+ftse1d = mean(abs(log_ret_uk_1d))
+
+ftse = log(c(ftse10s,ftse1m,ftse5m,ftse15m,ftse30m,ftse1h,ftse4h,ftse12h,ftse1d))
+Density=c(log(10),log(60),log(60*5),log(60*15),log(60*30),log(60*60),
+          log(60*60*4),log(60*60*12),log(60*60*24))
+exp(ftse)
+exp(Density)
+
+line2=lm(as.data.frame(matrix(c(ftse,Density),ncol=2)))
+summary(line2)
+
+(coefs2 = c(exp(line2$coefficients[1]),line2$coefficients[2],1/line2$coefficients[2]))
+
+plot(x=Density,y=ftse,log="",ylab="log(Absolute Price Change)",
+     xlab="log(Interval in Seconds)",pch=19,main="Scaling Law for FTSE100")
+abline(line2,col="black")
+
+
+```
+
+### Distributions different scales
+
+```{r}
+
+# HACER VECTORES ECDF 
+
+# data <- sort(as.numeric(data)) (hacer sort en los rendimientos/mean absolute rendimientos)
+# ypoints <- ppoints(data)
+
+plot(ecdf(log_ret_jap_10s),col="black",xlim=c(-0.004,0.004),
+     main="Empirical Distribution Functions for Nikkei 225",xlab="F(x)",ylab="Log-returns for Nikkei 225")
+lines(ecdf(log_ret_jap_5m),col="green",lty="dashed")
+lines(ecdf(log_ret_jap_15m),col="blue",lty="dotted")
+lines(ecdf(log_ret_jap_30m),col="red",lty="dotdash")
+legend("topleft", legend = c("10s", "5m", "15m", "30m"),
+       col = c("black", "green", "blue", "red"),
+       lty = c("solid", "dashed", "dotted", "dotdash"))
+
+
+plot(ecdf(log_ret_uk_10s),col="black",xlim=c(-0.004,0.004),
+     main="Empirical Distribution Functions for FTSE 100",xlab="F(x)",ylab="Log-returns for FTSE 100")
+lines(ecdf(log_ret_uk_5m),col="green",lty="dashed")
+lines(ecdf(log_ret_uk_15m),col="blue",lty="dotted")
+lines(ecdf(log_ret_uk_30m),col="red",lty="dotdash")
+legend("topleft", legend = c("10s", "5m", "15m", "30m"),
+       col = c("black", "green", "blue", "red"),
+       lty = c("solid", "dashed", "dotted", "dotdash"))
+```
+
+### Nikkei 225 Variance
+
+```{r}
+nik10s = sd(abs(log_ret_jap_10s))
+nik1m = sd(abs(log_ret_jap_1m))
+nik5m = sd(abs(log_ret_jap_5m))
+nik15m = sd(abs(log_ret_jap_15m))
+nik30m = sd(abs(log_ret_jap_30m))
+nik1h = sd(abs(log_ret_jap_1h))
+nik4h = sd(abs(log_ret_jap_4h))
+nik12h = sd(abs(log_ret_jap_12h))
+nik1d = sd(abs(log_ret_jap_1d))
+
+
+nik = log(c(nik10s,nik1m,nik5m,nik15m,nik30m,nik1h,nik4h,nik12h,nik1d))
+exp(nik)
+Density=c(log(10),log(60),log(60*5),log(60*15),log(60*30),log(60*60),
+          log(60*60*4),log(60*60*12),log(60*60*24))
+exp(Density)
+
+line=lm(as.data.frame(matrix(c(nik,Density),ncol=2)))
+summary(line)
+
+(coefs = c(exp(line$coefficients[1]),line$coefficients[2],1/line$coefficients[2]))
+
+plot(x=Density,y=nik,log="",ylab="log(Std. Dev. Absolute Price Change)",
+     xlab="log(Interval in Seconds)",pch=19,main="Scaling Law for Nikkei 225")
+abline(line,col="black")
+
+```
+
+### FTSE 100 Variance
+
+
+```{r}
+ftse10s = sd(abs(log_ret_uk_10s))
+ftse1m = sd(abs(log_ret_uk_1m))
+ftse5m = sd(abs(log_ret_uk_5m))
+ftse15m = sd(abs(log_ret_uk_15m))
+ftse30m = sd(abs(log_ret_uk_30m))
+ftse1h = sd(abs(log_ret_uk_1h))
+ftse4h = sd(abs(log_ret_uk_4h))
+ftse12h = sd(abs(log_ret_uk_12h))
+ftse1d = sd(abs(log_ret_uk_1d))
+
+ftse = log(c(ftse10s,ftse1m,ftse5m,ftse15m,ftse30m,ftse1h,ftse4h,ftse12h,ftse1d))
+Density=c(log(10),log(60),log(60*5),log(60*15),log(60*30),log(60*60),
+          log(60*60*4),log(60*60*12),log(60*60*24))
+exp(ftse)
+exp(Density)
+
+line2=lm(as.data.frame(matrix(c(ftse,Density),ncol=2)))
+summary(line2)
+
+(coefs2 = c(exp(line2$coefficients[1]),line2$coefficients[2],1/line2$coefficients[2]))
+
+plot(x=Density,y=ftse,log="",ylab="log(Std. Dev. Absolute Price Change)",
+     xlab="log(Interval in Seconds)",pch=19,main="Scaling Law for FTSE100")
+abline(line2,col="black")
+
+```
+
+
+### Nikkei 225 Skewness & Kurtosis
+
+```{r}
+skew = c(skewness(abs(log_ret_jap_10s)),skewness(abs(log_ret_jap_1m)),
+         skewness(abs(log_ret_jap_5m)),skewness(abs(log_ret_jap_15m)),
+         skewness(abs(log_ret_jap_30m)),skewness(abs(log_ret_jap_1h)),
+         skewness(abs(log_ret_jap_4h)),skewness(abs(log_ret_jap_12h)),
+         skewness(abs(log_ret_jap_1d)))
+
+names(skew) <- c("10s","1m","5m","15m","30m","1h","4h","12h","1d")
+
+skew
+
+kurt = c(kurtosis(abs(log_ret_jap_10s)),kurtosis(abs(log_ret_jap_1m)),
+         kurtosis(abs(log_ret_jap_5m)),kurtosis(abs(log_ret_jap_15m)),
+         kurtosis(abs(log_ret_jap_30m)),kurtosis(abs(log_ret_jap_1h)),
+         kurtosis(abs(log_ret_jap_4h)),kurtosis(abs(log_ret_jap_12h)),
+         kurtosis(abs(log_ret_jap_1d)))
+
+names(kurt) <- c("10s","1m","5m","15m","30m","1h","4h","12h","1d")
+
+kurt
+```
+
+### FTSE 100 Skewness & Kurtosis
+
+```{r}
+
+skew = c(skewness(abs(log_ret_uk_10s)),skewness(abs(log_ret_uk_1m)),
+         skewness(abs(log_ret_uk_5m)),skewness(abs(log_ret_uk_15m)),
+         skewness(abs(log_ret_uk_30m)),skewness(abs(log_ret_uk_1h)),
+         skewness(abs(log_ret_uk_4h)),skewness(abs(log_ret_uk_12h)),
+         skewness(abs(log_ret_uk_1d)))
+
+names(skew) <- c("10s","1m","5m","15m","30m","1h","4h","12h","1d")
+
+skew
+
+kurt = c(kurtosis(abs(log_ret_uk_10s)),kurtosis(abs(log_ret_uk_1m)),
+         kurtosis(abs(log_ret_uk_5m)),kurtosis(abs(log_ret_uk_15m)),
+         kurtosis(abs(log_ret_uk_30m)),kurtosis(abs(log_ret_uk_1h)),
+         kurtosis(abs(log_ret_uk_4h)),kurtosis(abs(log_ret_uk_12h)),
+         kurtosis(abs(log_ret_uk_1d)))
+
+names(kurt) <- c("10s","1m","5m","15m","30m","1h","4h","12h","1d")
+
+kurt
+```
+
+### Nikkei 225 IQR
+
+```{r}
+nik10s = IQR(abs(log_ret_jap_10s))
+nik1m = IQR(abs(log_ret_jap_1m))
+nik5m = IQR(abs(log_ret_jap_5m))
+nik15m = IQR(abs(log_ret_jap_15m))
+nik30m = IQR(abs(log_ret_jap_30m))
+nik1h = IQR(abs(log_ret_jap_1h))
+nik4h = IQR(abs(log_ret_jap_4h))
+nik12h = IQR(abs(log_ret_jap_12h))
+nik1d = IQR(abs(log_ret_jap_1d))
+
+
+nik = log(c(nik10s,nik1m,nik5m,nik15m,nik30m,nik1h,nik4h,nik12h,nik1d))
+exp(nik)
+Density=c(log(10),log(60),log(60*5),log(60*15),log(60*30),log(60*60),
+          log(60*60*4),log(60*60*12),log(60*60*24))
+exp(Density)
+
+line=lm(as.data.frame(matrix(c(nik,Density),ncol=2)))
+summary(line)
+
+(coefs = c(exp(line$coefficients[1]),line$coefficients[2],1/line$coefficients[2]))
+
+plot(x=Density,y=nik,log="",ylab="log(IQR Absolute Price Change)",
+     xlab="log(Interval in Seconds)",pch=19,main="Scaling Law for Nikkei 225")
+abline(line,col="black")
+
+```
+
+### FTSE 100 IQR
+
+```{r}
+ftse10s = IQR(abs(log_ret_uk_10s))
+ftse1m = IQR(abs(log_ret_uk_1m))
+ftse5m = IQR(abs(log_ret_uk_5m))
+ftse15m = IQR(abs(log_ret_uk_15m))
+ftse30m = IQR(abs(log_ret_uk_30m))
+ftse1h = IQR(abs(log_ret_uk_1h))
+ftse4h = IQR(abs(log_ret_uk_4h))
+ftse12h = IQR(abs(log_ret_uk_12h))
+ftse1d = IQR(abs(log_ret_uk_1d))
+
+ftse = log(c(ftse10s,ftse1m,ftse5m,ftse15m,ftse30m,ftse1h,ftse4h,ftse12h,ftse1d))
+Density=c(log(10),log(60),log(60*5),log(60*15),log(60*30),log(60*60),
+          log(60*60*4),log(60*60*12),log(60*60*24))
+exp(ftse)
+exp(Density)
+
+line2=lm(as.data.frame(matrix(c(ftse,Density),ncol=2)))
+summary(line2)
+
+(coefs2 = c(exp(line2$coefficients[1]),line2$coefficients[2],1/line2$coefficients[2]))
+
+plot(x=Density,y=ftse,log="",ylab="log(IQR Absolute Price Change)",
+     xlab="log(Interval in Seconds)",pch=19,main="Scaling Law for FTSE100")
+abline(line2,col="black")
+
+```
+
