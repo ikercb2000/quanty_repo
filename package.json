@@ -8,6 +8,6 @@
     }
   },
   "scripts": {
-  "commit": "cz"
+    "commit": "cz"
   }
 }
